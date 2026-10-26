@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [dependencies]
 anyhow.workspace = true
 partshield-core = { path = "../core" }

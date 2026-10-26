@@ -146,6 +146,9 @@ pub struct Session {
     pub records: Vec<CommandRecord>,
     /// Print each command to stderr before running it.
     pub echo: bool,
+    /// Si está, recibe cada comando antes de lanzarlo (la interfaz lo
+    /// muestra en vivo). Un receptor cerrado no detiene nada.
+    pub progress: Option<std::sync::mpsc::Sender<String>>,
 }
 
 impl Session {
@@ -153,6 +156,7 @@ impl Session {
         Self {
             records: Vec::new(),
             echo,
+            progress: None,
         }
     }
 
@@ -164,6 +168,9 @@ impl Session {
         }
         if self.echo {
             eprintln!("$ {cmd}");
+        }
+        if let Some(tx) = &self.progress {
+            let _ = tx.send(cmd.to_string());
         }
         Ok(())
     }

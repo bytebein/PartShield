@@ -1,0 +1,11 @@
+{"blockdevices":[
+  {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":1024209543168,"fstype":null,"label":null,"uuid":null,"model":"Samsung SSD 980 PRO 1TB","serial":"S5GXNF0R1","tran":"nvme","rm":false,"mountpoints":[null],
+    "children":[
+      {"name":"nvme0n1p1","path":"/dev/nvme0n1p1","type":"part","size":1073741824,"fstype":"vfat","label":null,"uuid":"A1B2-C3D4","model":null,"serial":null,"tran":"nvme","rm":false,"mountpoints":[null]},
+      {"name":"nvme0n1p2","path":"/dev/nvme0n1p2","type":"part","size":1023134760960,"fstype":"crypto_LUKS","label":null,"uuid":"c0ffee","model":null,"serial":null,"tran":"nvme","rm":false,"mountpoints":[null],
+        "children":[{"name":"luks-c0ffee","path":"/dev/mapper/luks-c0ffee","type":"crypt","size":1023118000000,"fstype":"btrfs","label":"cachyos","uuid":"b7f1","model":null,"serial":null,"tran":null,"rm":false,"mountpoints":[null]}]}
+    ]},
+  {"name":"nvme1n1","path":"/dev/nvme1n1","type":"disk","size":2000398934016,"fstype":null,"label":null,"uuid":null,"model":"WD_BLACK SN850X 2000GB","serial":"23XYZ","tran":"nvme","rm":false,"mountpoints":[null],
+    "children":[{"name":"nvme1n1p1","path":"/dev/nvme1n1p1","type":"part","size":2000397000000,"fstype":"ext4","label":"copias","uuid":"e4","model":null,"serial":null,"tran":"nvme","rm":false,"mountpoints":[null]}]},
+  {"name":"sda","path":"/dev/sda","type":"disk","size":31029460992,"fstype":"iso9660","label":"PARTSHIELD","uuid":null,"model":"Ultra Fit","serial":"4C53","tran":"usb","rm":true,"mountpoints":["/run/live/medium"]}
+]}
