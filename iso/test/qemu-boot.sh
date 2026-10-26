@@ -56,6 +56,9 @@ boot() { # boot MODO
         echo "FALLO  $mode: sin $want en ${secs}s (últimas líneas del serie:)"; tail -5 "$log" | tr -d '\r' | sed 's/^/        /'
         return 1
     fi
+    if [[ $want == PARTSHIELD_READY && $line != *user=ok* ]]; then
+        echo "FALLO  $mode: falta el usuario partshield: $line"; return 1
+    fi
     case $mode in
         secureboot) [[ $line == *secureboot=1* ]] || { echo "FALLO  $mode: arrancó sin Secure Boot: $line"; return 1; } ;;
         uefi) [[ $line == *secureboot=0* ]] || { echo "FALLO  $mode: $line"; return 1; } ;;

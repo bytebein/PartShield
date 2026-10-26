@@ -2,6 +2,9 @@
 live-boot
 live-config
 live-config-systemd
+# Crea el usuario partshield al arrancar. live-config solo lo recomienda y
+# construimos sin recomendados: sin él, el inicio automático falla.
+user-setup
 systemd-sysv
 sudo
 locales

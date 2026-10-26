@@ -15,4 +15,7 @@ fi
 ver=$(partshield --version 2>/dev/null | cut -d' ' -f2)
 btrfs=$(btrfs --version 2>/dev/null | head -1 | cut -d' ' -f2)
 pc=$(partclone.btrfs --version 2>&1 | grep -o 'v[0-9.]*' | head -1)
-say "PARTSHIELD_READY version=$ver kernel=$(uname -r) secureboot=$sb btrfs-progs=$btrfs partclone=$pc"
+# El usuario del live lo crea live-config (con user-setup) al arrancar.
+user=FALTA
+id -u partshield >/dev/null 2>&1 && user=ok
+say "PARTSHIELD_READY version=$ver kernel=$(uname -r) secureboot=$sb btrfs-progs=$btrfs partclone=$pc user=$user"
