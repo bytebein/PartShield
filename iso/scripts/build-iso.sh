@@ -34,6 +34,8 @@ cp -a /src/iso/live/. "$B/"
 mkdir -p "$B/config/packages.chroot"
 cp /out/debs/*.deb "$B/config/packages.chroot/"
 cd "$B"
+# Caché de paquetes .deb entre construcciones (no afecta al resultado).
+mkdir -p /out/lb-cache && ln -sfn /out/lb-cache cache
 
 log "lb config"
 chmod +x auto/config

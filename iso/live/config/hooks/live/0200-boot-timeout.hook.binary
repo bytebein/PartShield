@@ -1,0 +1,10 @@
+#!/bin/sh
+# Se ejecuta en el directorio de la imagen antes de crear la ISO.
+# Por defecto isolinux tiene "timeout 0" y GRUB ninguno: los dos esperan
+# para siempre en el menú. Con 5 s arranca solo (pruebas automáticas,
+# equipos desatendidos) y aún da tiempo a elegir otra entrada.
+set -e
+sed -i 's/^timeout 0$/timeout 50/' isolinux/isolinux.cfg
+grep -q '^timeout 50$' isolinux/isolinux.cfg
+sed -i '1i set timeout=5' boot/grub/config.cfg
+grep -q '^set timeout=5$' boot/grub/config.cfg
