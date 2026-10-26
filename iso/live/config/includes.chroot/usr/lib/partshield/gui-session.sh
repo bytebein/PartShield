@@ -11,7 +11,7 @@ if [ -z "$scale" ] && [ -n "$out" ]; then
         END {
             if (w_mm > 0 && px > 0) {
                 dpi = px / (w_mm / 25.4)
-                if (dpi >= 190) print 2; else if (dpi >= 140) print 1.5; else print 1
+                if (dpi >= 240) print 2; else if (dpi >= 160) print 1.5; else print 1
             }
         }')
 fi
