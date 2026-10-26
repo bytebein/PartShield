@@ -965,6 +965,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "partshield-core",
+ "tempfile",
 ]
 
 [[package]]
