@@ -18,7 +18,7 @@ lb config noauto \
     --apt-recommends false \
     --apt-options "--yes -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5" \
     --linux-flavours amd64 \
-    --firmware-chroot true \
+    --firmware-chroot false \
     --binary-images iso-hybrid \
     --bootloaders "grub-efi,syslinux" \
     --uefi-secure-boot enable \
