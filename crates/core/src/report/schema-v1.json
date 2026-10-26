@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://partshield.invalid/schema/report-v1.json",
+  "title": "Informe de copia de PartShield, esquema v1",
+  "description": "Informe que se escribe junto a cada copia. Los informes sin schema_version (v0) se migran en memoria a esta forma; ver report::schema.",
+  "type": "object",
+  "required": [
+    "schema_version", "tool", "version", "started", "finished", "source", "device",
+    "block_stack", "superblock", "modes", "mode", "hash_algo", "artifact", "layout",
+    "parent_report", "chain", "verification", "commands", "error", "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool": { "type": "string" },
+    "version": { "type": "string" },
+    "started": { "type": "string", "format": "date-time" },
+    "finished": { "type": "string", "format": "date-time" },
+    "source": { "type": "string" },
+    "device": { "type": ["string", "null"] },
+    "block_stack": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/block_stack" }] },
+    "superblock": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/superblock" }] },
+    "modes": { "type": "array", "items": { "$ref": "#/$defs/assessment" } },
+    "mode": { "$ref": "#/$defs/mode" },
+    "hash_algo": { "$ref": "#/$defs/hash_algo" },
+    "artifact": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/artifact" }] },
+    "layout": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/layout" }] },
+    "parent_report": { "type": ["string", "null"] },
+    "chain": { "type": "array", "items": { "$ref": "#/$defs/stream_ref" } },
+    "verification": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] },
+    "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+    "error": { "type": ["string", "null"] },
+    "signature": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/signature" }] }
+  },
+  "$defs": {
+    "mode": { "enum": ["send", "partclone", "raw"] },
+    "hash_algo": { "enum": ["blake3", "sha256"] },
+    "digest": {
+      "type": "object",
+      "required": ["algo", "hex"],
+      "additionalProperties": false,
+      "properties": {
+        "algo": { "$ref": "#/$defs/hash_algo" },
+        "hex": { "type": "string", "pattern": "^[0-9a-f]+$" }
+      }
+    },
+    "encryption": {
+      "type": "object",
+      "required": ["scheme", "recipients"],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": { "const": "age" },
+        "recipients": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "chunk_ref": {
+      "type": "object",
+      "required": ["path", "bytes", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "chunking": {
+      "type": "object",
+      "required": ["chunk_bytes", "parts"],
+      "additionalProperties": false,
+      "properties": {
+        "chunk_bytes": { "type": "integer", "minimum": 0 },
+        "parts": { "type": "array", "items": { "$ref": "#/$defs/chunk_ref" } }
+      }
+    },
+    "stream_ref": {
+      "type": "object",
+      "required": ["path", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+        "encryption": { "$ref": "#/$defs/encryption" },
+        "chunks": { "$ref": "#/$defs/chunking" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["stream", "snapshot", "digest", "compressed_bytes", "stream_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "stream": { "type": "string" },
+        "snapshot": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "compressed_bytes": { "type": "integer", "minimum": 0 },
+        "stream_bytes": { "type": "integer", "minimum": 0 },
+        "encryption": { "$ref": "#/$defs/encryption" },
+        "chunks": { "$ref": "#/$defs/chunking" }
+      }
+    },
+    "flag_set": {
+      "type": "object",
+      "required": ["raw", "names", "unknown"],
+      "additionalProperties": false,
+      "properties": {
+        "raw": { "type": "string", "pattern": "^0x[0-9a-f]+$" },
+        "names": { "type": "array", "items": { "type": "string" } },
+        "unknown": { "type": "string", "pattern": "^0x[0-9a-f]+$" }
+      }
+    },
+    "features": {
+      "type": "object",
+      "required": ["compat", "compat_ro", "incompat"],
+      "additionalProperties": false,
+      "properties": {
+        "compat": { "type": "integer", "minimum": 0 },
+        "compat_ro": { "$ref": "#/$defs/flag_set" },
+        "incompat": { "$ref": "#/$defs/flag_set" }
+      }
+    },
+    "checksum_status": {
+      "anyOf": [
+        { "const": "Valid" },
+        {
+          "type": "object",
+          "required": ["NotVerified"],
+          "additionalProperties": false,
+          "properties": {
+            "NotVerified": {
+              "type": "object",
+              "required": ["csum_type"],
+              "additionalProperties": false,
+              "properties": { "csum_type": { "type": "integer", "minimum": 0 } }
+            }
+          }
+        }
+      ]
+    },
+    "superblock": {
+      "type": "object",
+      "required": [
+        "fsid", "label", "generation", "root", "chunk_root", "chunk_root_level",
+        "total_bytes", "bytes_used", "num_devices", "sectorsize", "nodesize",
+        "csum_type", "checksum", "features"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fsid": { "type": "string" },
+        "label": { "type": "string" },
+        "generation": { "type": "integer", "minimum": 0 },
+        "root": { "type": "integer", "minimum": 0 },
+        "chunk_root": { "type": "integer", "minimum": 0 },
+        "chunk_root_level": { "type": "integer", "minimum": 0 },
+        "total_bytes": { "type": "integer", "minimum": 0 },
+        "bytes_used": { "type": "integer", "minimum": 0 },
+        "num_devices": { "type": "integer", "minimum": 0 },
+        "sectorsize": { "type": "integer", "minimum": 0 },
+        "nodesize": { "type": "integer", "minimum": 0 },
+        "csum_type": { "type": "integer", "minimum": 0 },
+        "checksum": { "$ref": "#/$defs/checksum_status" },
+        "features": { "$ref": "#/$defs/features" }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "required": ["mode", "allowed", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "$ref": "#/$defs/mode" },
+        "allowed": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "block_layer": {
+      "type": "object",
+      "required": ["kind", "device", "uuid", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["disk", "partition", "luks", "lvm_lv", "loop", "other"] },
+        "device": { "type": "string" },
+        "uuid": { "type": ["string", "null"] },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "block_stack": {
+      "type": "object",
+      "required": ["layers"],
+      "additionalProperties": false,
+      "properties": {
+        "layers": { "type": "array", "items": { "$ref": "#/$defs/block_layer" } }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "required": ["fs_uuid", "partition_table", "esp", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "fs_uuid": { "type": ["string", "null"] },
+        "partition_table": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/stream_ref" }] },
+        "esp": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/stream_ref" }] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "required": ["entries", "files", "bytes", "differences", "total_differences"],
+      "additionalProperties": false,
+      "properties": {
+        "entries": { "type": "integer", "minimum": 0 },
+        "files": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "differences": { "type": "array", "items": { "type": "string" } },
+        "total_differences": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["name", "status", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "enum": ["passed", "failed", "skipped"] },
+        "detail": { "type": "string" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["verdict", "steps", "comparison"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": { "enum": ["valid", "reduced", "invalid"] },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "comparison": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/comparison" }] }
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": ["command", "exit_code", "duration_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "exit_code": { "type": ["integer", "null"] },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algo", "public_key", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "algo": { "const": "ed25519" },
+        "public_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "value": { "type": "string", "pattern": "^[0-9a-f]{128}$" }
+      }
+    }
+  }
+}
