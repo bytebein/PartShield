@@ -100,6 +100,7 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
         chain: Vec::new(),
         verification: None,
         commands: Vec::new(),
+        warnings: Vec::new(),
         error: None,
         signature: None,
     };
@@ -141,8 +142,7 @@ fn run_backup(
     };
 
     let device = send::backing_device(s, opts.source)?;
-    let sb = Superblock::read_from(&device)?;
-    report.modes = modes::assess(&sb.features, partclone_version(s));
+    let sb = inspect_device(s, &device, report)?;
     let scratch_size = sb.bytes_used.saturating_mul(2).max(1 << 30);
     report.device = Some(device);
     report.superblock = Some(sb);
@@ -224,15 +224,18 @@ pub fn backup_raw(s: &mut Session, opts: &RawOptions) -> Result<(Report, PathBuf
         chain: Vec::new(),
         verification: None,
         commands: Vec::new(),
+        warnings: Vec::new(),
         error: None,
         signature: None,
     };
 
     let run = |s: &mut Session, report: &mut Report| -> Result<()> {
         // Si es Btrfs, se registra lo detectado; la imagen raw vale igual si no lo es.
-        if let Ok(sb) = Superblock::read_from(opts.device) {
-            report.modes = modes::assess(&sb.features, partclone_version(s));
+        if Superblock::read_from(opts.device).is_ok() {
+            let sb = inspect_device(s, opts.device, report)?;
             report.superblock = Some(sb);
+        } else {
+            report.block_stack = block_stack_or_warn(s, opts.device, report);
         }
         let (artifact, image) = raw::backup(
             s,
@@ -262,6 +265,43 @@ pub fn backup_raw(s: &mut Session, opts: &RawOptions) -> Result<(Report, PathBuf
     report.commands = std::mem::take(&mut s.records);
     write_report(&mut report, &report_path, opts.sign_key)?;
     Ok((report, report_path))
+}
+
+/// Superbloque (las tres copias), modos seguros según el kernel y capas
+/// de bloque. Lo que no impide la copia queda en `report.warnings`.
+fn inspect_device(s: &mut Session, device: &Path, report: &mut Report) -> Result<Superblock> {
+    let copies = detect::read_all_copies(device)?;
+    let sb = copies.primary().cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "el superbloque primario de {} no es válido: {:?}",
+            device.display(),
+            copies.copies.first().map(|c| &c.status)
+        )
+    })?;
+    report.warnings.extend(copies.discrepancies());
+    report.modes = modes::assess_with_kernel(
+        &sb.features,
+        partclone_version(s),
+        modes::KernelFeatures::from_sysfs().as_ref(),
+    );
+    report.block_stack = block_stack_or_warn(s, device, report);
+    Ok(sb)
+}
+
+fn block_stack_or_warn(
+    s: &mut Session,
+    device: &Path,
+    report: &mut Report,
+) -> Option<types::BlockStack> {
+    match detect::block_stack(s, device) {
+        Ok(b) => Some(b),
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("no se pudieron leer las capas de bloque: {e:#}"));
+            None
+        }
+    }
 }
 
 /// Firma (si hay clave) y escribe `X.report.json` y `X.report.html`.

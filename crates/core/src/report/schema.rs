@@ -97,6 +97,7 @@ fn v0_to_v1(mut v: Value) -> Result<Value> {
     }
     // v0 solo sabía calcular BLAKE3.
     obj.entry("hash_algo").or_insert(json!("blake3"));
+    obj.entry("warnings").or_insert(json!([]));
     for field in ["block_stack", "layout", "raw", "signature"] {
         obj.entry(field).or_insert(Value::Null);
     }

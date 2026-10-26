@@ -570,6 +570,13 @@ pub fn render_html(r: &Report) -> String {
             esc(e)
         );
     }
+    if !r.warnings.is_empty() {
+        out.push_str("<section><h2>Avisos</h2><ul>");
+        for w in &r.warnings {
+            let _ = write!(out, "<li>{}</li>", esc(w));
+        }
+        out.push_str("</ul></section>\n");
+    }
     origin(&mut out, r);
     features(&mut out, r);
     modes(&mut out, r);

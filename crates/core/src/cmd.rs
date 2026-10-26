@@ -45,9 +45,41 @@ pub fn sandboxed() -> bool {
 }
 
 fn is_real_device(a: &str) -> bool {
-    a.starts_with("/dev/")
-        && !a.starts_with("/dev/loop")
-        && !matches!(a, "/dev/null" | "/dev/zero" | "/dev/urandom")
+    if !a.starts_with("/dev/")
+        || a.starts_with("/dev/loop")
+        || matches!(a, "/dev/null" | "/dev/zero" | "/dev/urandom")
+    {
+        return false;
+    }
+    // Dispositivos dm (LUKS, LVM) solo si todo lo que tienen debajo son loops.
+    let dm = a
+        .strip_prefix("/dev/mapper/partshield-test-")
+        .and(std::fs::canonicalize(a).ok())
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .or_else(|| {
+            a.strip_prefix("/dev/")
+                .filter(|n| n.starts_with("dm-"))
+                .map(str::to_string)
+        });
+    match dm {
+        Some(name) => !dm_on_loops(&name),
+        None => true,
+    }
+}
+
+/// Cada esclavo del dispositivo dm, recursivamente, es un loop device.
+fn dm_on_loops(name: &str) -> bool {
+    let Ok(rd) = std::fs::read_dir(format!("/sys/class/block/{name}/slaves")) else {
+        return false;
+    };
+    let slaves: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    !slaves.is_empty()
+        && slaves
+            .iter()
+            .all(|s| s.starts_with("loop") || (s.starts_with("dm-") && dm_on_loops(s)))
 }
 
 /// Guard for code that opens a path directly instead of through `Cmd`.
@@ -257,6 +289,19 @@ mod tests {
         );
         assert_eq!(real(Cmd::new("mount").arg("/dev/loop3").arg("/mnt")), None);
         assert_eq!(real(Cmd::new("dd").arg("if=/dev/zero")), None);
+        // Un dm que no existe (o no cuelga de loops) se trata como real.
+        assert_eq!(
+            real(Cmd::new("mount").arg("/dev/dm-999")),
+            Some("/dev/dm-999".into())
+        );
+        assert_eq!(
+            real(Cmd::new("mount").arg("/dev/mapper/partshield-test-nada")),
+            Some("/dev/mapper/partshield-test-nada".into())
+        );
+        assert_eq!(
+            real(Cmd::new("mount").arg("/dev/mapper/cryptroot")),
+            Some("/dev/mapper/cryptroot".into())
+        );
     }
 
     #[test]

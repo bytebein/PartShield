@@ -136,9 +136,9 @@ impl std::fmt::Display for Version {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum ChecksumStatus {
-    /// crc32c verified.
+    /// Checksum verified (crc32c, xxhash64, sha256 or blake2b).
     Valid,
-    /// The filesystem uses xxhash/sha256/blake2; not verified here.
+    /// csum_type unknown to this build.
     NotVerified { csum_type: u16 },
 }
 
@@ -454,6 +454,9 @@ pub struct Report {
     pub chain: Vec<StreamRef>,
     pub verification: Option<Verification>,
     pub commands: Vec<CommandRecord>,
+    /// Avisos que no impiden la copia (p. ej. copias del superbloque que
+    /// discrepan, capas de bloque que no se pudieron leer).
+    pub warnings: Vec<String>,
     pub error: Option<String>,
     /// Firma del informe sin este campo (report).
     pub signature: Option<Signature>,

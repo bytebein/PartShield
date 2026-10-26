@@ -201,6 +201,7 @@ pub(crate) mod sample {
                 exit_code: Some(0),
                 duration_ms: 3,
             }],
+            warnings: vec!["la copia de 64 MiB del superbloque es de otra generación".into()],
             error: None,
             signature: None,
         }

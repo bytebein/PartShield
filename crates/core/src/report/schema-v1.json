@@ -7,7 +7,7 @@
   "required": [
     "schema_version", "tool", "version", "started", "finished", "source", "device",
     "block_stack", "superblock", "modes", "mode", "hash_algo", "artifact", "layout",
-    "raw", "parent_report", "chain", "verification", "commands", "error", "signature"
+    "raw", "parent_report", "chain", "verification", "commands", "warnings", "error", "signature"
   ],
   "additionalProperties": false,
   "properties": {
@@ -30,6 +30,7 @@
     "chain": { "type": "array", "items": { "$ref": "#/$defs/stream_ref" } },
     "verification": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] },
     "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
     "error": { "type": ["string", "null"] },
     "signature": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/signature" }] }
   },
