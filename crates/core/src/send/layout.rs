@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{check_digest, compress_hashed, decompress_into};
 use crate::cmd::{guard_path, Cmd, Session};
+use crate::detect::blockdev::mounts_below;
 use crate::types::{Digest, DiskLayout, HashAlgo, Hasher, StreamRef};
 
 /// Tipo GPT de la partición de sistema EFI.
@@ -149,36 +150,14 @@ pub fn parent_disk(s: &mut Session, part: &Path) -> Result<Option<PathBuf>> {
     Ok(parse_parent_disk(&out))
 }
 
-/// `src` es `disk` o una de sus particiones (`sda1`, `loop0p1`, `nvme0n1p2`).
-fn is_disk_or_partition(src: &str, disk: &str) -> bool {
-    let Some(rest) = src.strip_prefix(disk) else {
-        return false;
-    };
-    if rest.is_empty() {
-        return true;
-    }
-    let number = if disk.ends_with(|c: char| c.is_ascii_digit()) {
-        rest.strip_prefix('p')
-    } else {
-        Some(rest)
-    };
-    number.is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-}
-
-/// Primera línea de `findmnt -rn -o SOURCE` que es `disk` o una partición suya.
-fn mounted_sources_touch(findmnt: &str, disk: &str) -> Option<String> {
-    findmnt
-        .lines()
-        .map(|l| l.trim().split('[').next().unwrap_or_default())
-        .find(|src| is_disk_or_partition(src, disk))
-        .map(str::to_string)
-}
-
 fn ensure_unmounted(s: &mut Session, dev: &Path) -> Result<()> {
-    let out = s.run(Cmd::new("findmnt").arg("-rn").arg("-o").arg("SOURCE"))?;
-    if let Some(src) = mounted_sources_touch(&out, &dev.to_string_lossy()) {
+    // También lo que cuelga por LUKS o LVM (`/dev/mapper/…`), que un
+    // simple prefijo de ruta no reconoce.
+    if let Some(m) = mounts_below(s, dev)?.into_iter().next() {
         bail!(
-            "{src} está montado; desmóntalo antes de escribir en {}",
+            "{} está montado en {}; desmóntalo antes de escribir en {}",
+            m.device,
+            m.target,
             dev.display()
         );
     }

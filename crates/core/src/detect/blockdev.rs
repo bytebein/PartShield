@@ -177,6 +177,62 @@ pub fn parse_lsblk(json: &str) -> Result<BlockStack> {
     Ok(build(&parse_nodes(json)?))
 }
 
+/// Un sistema de archivos montado sobre un dispositivo o sobre algo que
+/// cuelga de él: particiones, LUKS abiertos, volúmenes LVM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountBelow {
+    pub device: String,
+    pub target: String,
+    pub read_write: bool,
+}
+
+/// Todo lo montado sobre `dev` o por debajo de él. `findmnt -S /dev/sdb`
+/// no ve `/dev/sdb1` ni `/dev/mapper/cryptroot`, así que primero se listan
+/// los descendientes con `lsblk`. Si `dev` es un archivo, solo se mira él.
+pub fn mounts_below(s: &mut Session, dev: &Path) -> Result<Vec<MountBelow>> {
+    let mut devices = vec![dev.to_string_lossy().into_owned()];
+    let tree = s.run_unchecked(&Cmd::new("lsblk").arg("-nrp").arg("-o").arg("PATH").arg(dev))?;
+    if tree.success {
+        for d in tree.stdout.lines().map(str::trim).filter(|d| !d.is_empty()) {
+            if !devices.iter().any(|x| x == d) {
+                devices.push(d.to_string());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for d in devices {
+        let r = s.run_unchecked(
+            &Cmd::new("findmnt")
+                .arg("-rn")
+                .arg("-o")
+                .arg("TARGET,OPTIONS")
+                .arg("-S")
+                .arg(&d),
+        )?;
+        // findmnt sale con 1 cuando no está montado.
+        if r.success {
+            out.extend(parse_findmnt_targets(&d, &r.stdout));
+        }
+    }
+    Ok(out)
+}
+
+/// Líneas `TARGET OPTIONS` de `findmnt -rn -o TARGET,OPTIONS`.
+pub fn parse_findmnt_targets(device: &str, out: &str) -> Vec<MountBelow> {
+    out.lines()
+        .filter_map(|l| {
+            let mut cols = l.split_whitespace();
+            let target = cols.next()?.to_string();
+            let options = cols.next().unwrap_or("");
+            Some(MountBelow {
+                device: device.to_string(),
+                target,
+                read_write: options.split(',').any(|o| o == "rw"),
+            })
+        })
+        .collect()
+}
+
 /// `(UUID, TYPE)` from `blkid -p -o export` output. Pure.
 pub fn parse_blkid_export(out: &str) -> (Option<String>, Option<String>) {
     let get = |key: &str| {
@@ -327,6 +383,16 @@ pub fn luks_header(path: &Path) -> Result<Option<LuksHeader>> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn parses_findmnt_targets() {
+        let out = "/ rw,relatime,space_cache=v2\n/mnt/copia ro,noatime\n";
+        let m = super::parse_findmnt_targets("/dev/mapper/cryptroot", out);
+        assert_eq!(m.len(), 2);
+        assert!(m[0].read_write && !m[1].read_write);
+        assert_eq!(m[1].target, "/mnt/copia");
+        assert_eq!(m[0].device, "/dev/mapper/cryptroot");
+    }
     use super::*;
     use std::io::Write;
 

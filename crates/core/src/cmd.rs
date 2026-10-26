@@ -101,7 +101,8 @@ pub fn guard_path(path: &std::path::Path) -> Result<()> {
 }
 
 impl Cmd {
-    /// First argument that is a `/dev/` path other than a loop device.
+    /// First argument that is a `/dev/` path other than a loop device,
+    /// also through symlinks (`/tmp/disco -> /dev/sda`).
     fn real_device(&self) -> Option<String> {
         std::iter::once(&self.program)
             .chain(&self.args)
@@ -110,7 +111,14 @@ impl Cmd {
                 // Also catch `if=/dev/sda` style arguments.
                 a.split('=').map(str::to_string).collect::<Vec<_>>()
             })
-            .find(|a| is_real_device(a))
+            .find_map(|a| {
+                if is_real_device(&a) {
+                    return Some(a);
+                }
+                let resolved = std::fs::canonicalize(&a).ok()?;
+                let resolved = resolved.to_string_lossy();
+                is_real_device(&resolved).then(|| format!("{a} ({resolved})"))
+            })
     }
 }
 
@@ -223,10 +231,11 @@ impl Session {
         self.announce(&cmd)?;
         let start = Instant::now();
         let mut child = spawn(&cmd, Stdio::null(), Stdio::piped())?;
+        let stderr = drain_stderr(&mut child);
         let mut stdout = child.stdout.take().expect("piped stdout");
         let res = consume(&mut stdout);
         drop(stdout);
-        let res = self.finish(&cmd, child, start, res)?;
+        let res = self.finish(&cmd, child, stderr, start, res)?;
         Ok(res)
     }
 
@@ -239,27 +248,48 @@ impl Session {
         self.announce(&cmd)?;
         let start = Instant::now();
         let mut child = spawn(&cmd, Stdio::piped(), Stdio::null())?;
+        let stderr = drain_stderr(&mut child);
         let mut stdin = child.stdin.take().expect("piped stdin");
         let res = produce(&mut stdin);
         drop(stdin);
-        self.finish(&cmd, child, start, res)
+        self.finish(&cmd, child, stderr, start, res)
     }
 
-    fn finish<T>(&mut self, cmd: &Cmd, child: Child, start: Instant, res: Result<T>) -> Result<T> {
-        let out = child
-            .wait_with_output()
+    fn finish<T>(
+        &mut self,
+        cmd: &Cmd,
+        mut child: Child,
+        stderr: std::thread::JoinHandle<Vec<u8>>,
+        start: Instant,
+        res: Result<T>,
+    ) -> Result<T> {
+        let status = child
+            .wait()
             .with_context(|| format!("esperando a `{cmd}`"))?;
-        self.record(cmd, out.status.code(), start);
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = stderr.join().unwrap_or_default();
+        self.record(cmd, status.code(), start);
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr);
             bail!(
                 "`{cmd}` falló (código {:?}): {}",
-                out.status.code(),
+                status.code(),
                 stderr.trim()
             );
         }
         res.with_context(|| format!("procesando la salida de `{cmd}`"))
     }
+}
+
+/// Lee stderr en otro hilo mientras el hilo principal escribe stdin o lee
+/// stdout: si el hijo llenara la tubería de stderr sin que nadie la
+/// vaciara, se quedaría bloqueado y nosotros esperándolo.
+fn drain_stderr(child: &mut Child) -> std::thread::JoinHandle<Vec<u8>> {
+    let mut err = child.stderr.take().expect("piped stderr");
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err.read_to_end(&mut buf);
+        buf
+    })
 }
 
 fn spawn(cmd: &Cmd, stdin: Stdio, stdout: Stdio) -> Result<Child> {
@@ -309,6 +339,57 @@ mod tests {
             real(Cmd::new("mount").arg("/dev/mapper/cryptroot")),
             Some("/dev/mapper/cryptroot".into())
         );
+    }
+
+    #[test]
+    fn sandbox_follows_symlinks_to_devices() {
+        // /dev/full existe en cualquier Linux y no es un loop.
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("disco");
+        std::os::unix::fs::symlink("/dev/full", &link).unwrap();
+        let l = link.display().to_string();
+        let found = Cmd::new("btrfs").arg("check").arg(&link).real_device();
+        assert_eq!(found, Some(format!("{l} (/dev/full)")));
+        let found = Cmd::new("dd").arg(format!("of={l}")).real_device();
+        assert_eq!(found, Some(format!("{l} (/dev/full)")));
+        let to_loop = dir.path().join("bucle");
+        std::os::unix::fs::symlink("/dev/loop0", &to_loop).unwrap();
+        assert_eq!(Cmd::new("mount").arg(&to_loop).real_device(), None);
+    }
+
+    #[test]
+    fn pipes_survive_a_flood_on_stderr() {
+        // 1 MiB a stderr mientras se escribe stdin: sin vaciar stderr en
+        // paralelo, el hijo se bloquearía y esto no terminaría nunca.
+        let mut s = Session::new(false);
+        let res = s.pipe_in(
+            Cmd::new("sh")
+                .arg("-c")
+                .arg("head -c 1048576 /dev/zero >&2; cat >/dev/null; exit 3"),
+            |w| {
+                w.write_all(&[1u8; 1 << 20])?;
+                Ok(())
+            },
+        );
+        let err = format!("{:#}", res.unwrap_err());
+        assert!(
+            err.contains("código Some(3)"),
+            "{}",
+            &err[..80.min(err.len())]
+        );
+        let got = s
+            .pipe_out(
+                Cmd::new("sh")
+                    .arg("-c")
+                    .arg("head -c 1048576 /dev/zero >&2; echo fin"),
+                |r| {
+                    let mut out = String::new();
+                    r.read_to_string(&mut out)?;
+                    Ok(out)
+                },
+            )
+            .unwrap();
+        assert_eq!(got, "fin\n");
     }
 
     #[test]

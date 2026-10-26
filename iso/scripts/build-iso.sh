@@ -47,7 +47,15 @@ grep -q '^LB_DISTRIBUTION="trixie"' config/bootstrap \
 grep -q '^LB_UEFI_SECURE_BOOT="enable"' config/binary \
     || { echo "lb config no activó Secure Boot" >&2; exit 1; }
 log "lb build (tarda: debootstrap, paquetes, squashfs, ISO)"
-lb build 2>&1 | tee /out/lb-build.log | grep -E '^P:|^E:|^W:' || true
+# El filtro solo es para la consola; lo que cuenta es la salida de lb build
+# (PIPESTATUS[0]). Un grep sin coincidencias no debe tumbar el script, y un
+# lb build fallido sí, aunque haya dejado una ISO a medias.
+set +e
+lb build 2>&1 | tee /out/lb-build.log | grep -E '^P:|^E:|^W:'
+lb_status=${PIPESTATUS[0]}
+set -e
+[ "$lb_status" -eq 0 ] \
+    || { echo "lb build falló (código $lb_status); ver /out/lb-build.log" >&2; exit 1; }
 
 ISO=$(ls "$B"/*.iso 2>/dev/null | head -1)
 [ -n "$ISO" ] || { echo "lb build no produjo ISO; ver /out/lb-build.log" >&2; exit 1; }

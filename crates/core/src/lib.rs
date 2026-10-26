@@ -154,6 +154,23 @@ fn run_backup(
         }
     };
 
+    // El informe describe un solo Btrfs (dispositivo, superbloque, layout,
+    // tamaño de la verificación): todos los subvolúmenes tienen que estar en él.
+    if !opts.subvolumes.is_empty() {
+        let fs = send::filesystem_id(s, opts.source)?;
+        for sub in opts.subvolumes {
+            let other = send::filesystem_id(s, sub.source)?;
+            if other != fs {
+                bail!(
+                    "{} ({}) está en otro sistema de archivos que {} ({fs}); \
+                     haz una copia por cada Btrfs",
+                    sub.source.display(),
+                    other,
+                    opts.source.display()
+                );
+            }
+        }
+    }
     let device = send::backing_device(s, opts.source)?;
     let sb = inspect_device(s, &device, report)?;
     // La imagen temporal es dispersa: su tamaño aparente no ocupa disco.

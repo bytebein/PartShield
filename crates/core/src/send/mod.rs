@@ -348,6 +348,8 @@ pub fn delete_subvolume(s: &mut Session, path: &Path) -> Result<()> {
 /// Decompresses a stream file into `w` and returns the digest of the
 /// compressed bytes read.
 pub fn decompress_into(stream: &Path, algo: HashAlgo, w: &mut dyn Write) -> Result<Digest> {
+    // La ruta puede venir de un informe: con la sandbox, nunca un disco real.
+    crate::cmd::guard_path(stream)?;
     let file = File::open(stream).with_context(|| format!("abriendo {}", stream.display()))?;
     let mut reader = HashingReader {
         inner: io::BufReader::new(file),

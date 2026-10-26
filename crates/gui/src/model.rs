@@ -295,10 +295,11 @@ pub fn run_job(
 ) -> Result<(Report, PathBuf)> {
     let mut s = Session::new(false);
     s.progress = Some(progress);
+    // Los montajes de preparación se quedan en la sesión: `backup` y
+    // `backup_raw` los guardan en el informe junto con el resto.
     let dest_dir = prepare_destination(&opts.dest, &mut s)?;
     std::fs::create_dir_all(&dest_dir)?;
-    let mut prep = std::mem::take(&mut s.records);
-    let (mut report, path) = match job {
+    let (report, path) = match job {
         Job::Raw { device } => backup_raw(
             &mut s,
             &RawOptions {
@@ -321,7 +322,6 @@ pub fn run_job(
             }
             s.run(Cmd::new("mount").arg("-o").arg("remount,rw").arg(mount))
                 .context("no se pudo montar el origen en escritura para crear los snapshots")?;
-            prep.append(&mut s.records);
             let labels: Vec<String> = subvolumes.iter().map(|p| subvol_label(p)).collect();
             let sources: Vec<PathBuf> = subvolumes.iter().map(|p| mount.join(p)).collect();
             let specs: Vec<SubvolSpec> = labels
@@ -346,14 +346,28 @@ pub fn run_job(
                     disk: None,
                 },
             );
-            // Vuelve a solo lectura pase lo que pase.
-            let _ = s.run_unchecked(&Cmd::new("mount").arg("-o").arg("remount,ro").arg(mount));
-            result?
+            // Vuelve a solo lectura pase lo que pase. El informe ya está
+            // escrito (nunca se sobrescribe), así que un fallo aquí solo puede
+            // ir al informe que muestra la interfaz.
+            let ro = s.run_unchecked(&Cmd::new("mount").arg("-o").arg("remount,ro").arg(mount));
+            let (mut report, path) = result?;
+            report.commands.append(&mut s.records);
+            if !ro.as_ref().is_ok_and(|o| o.success) {
+                let why = match ro {
+                    Ok(o) => o.stderr.trim().to_string(),
+                    Err(e) => format!("{e:#}"),
+                };
+                report.warnings.push(format!(
+                    "el origen sigue montado en escritura en {}: no se pudo volver a solo \
+                     lectura ({why}). Desmóntalo (umount {}) antes de seguir; este aviso \
+                     no está en el informe guardado, que se escribió antes",
+                    mount.display(),
+                    mount.display()
+                ));
+            }
+            (report, path)
         }
     };
-    // Los comandos de preparación (montajes) también son parte de la copia.
-    prep.append(&mut report.commands);
-    report.commands = prep;
     Ok((report, path))
 }
 
@@ -464,6 +478,9 @@ mod tests {
             Path::new(&dst).file_name().unwrap().to_string_lossy()
         );
         let (report, path) = res.unwrap();
+        // El informe guardado también lleva los montajes de preparación
+        // (se lee antes de desmontar el destino).
+        let saved = std::fs::read_to_string(&path).unwrap_or_default();
         cleanup(&m.mountpoint.display().to_string());
         assert!(path.starts_with(&dmnt), "{}", path.display());
         cleanup(&dmnt);
@@ -473,6 +490,10 @@ mod tests {
         assert_eq!(report.subvolumes.len(), 2);
         assert!(seen.iter().any(|c| c.starts_with("btrfs send")), "{seen:?}");
         assert!(report.commands[0].command.starts_with("mount"));
+        assert!(
+            saved.contains("remount,rw"),
+            "falta el montaje en el informe guardado"
+        );
     }
 
     fn nix_root() -> bool {

@@ -34,6 +34,10 @@ struct Entry {
     /// Hard link count; `None` for directories, whose count depends on the
     /// filesystem rather than on the data.
     nlink: Option<u64>,
+    /// Con más de un enlace duro: la primera ruta (en orden) del árbol que
+    /// comparte su inodo. Detecta enlaces recableados aunque los recuentos
+    /// coincidan.
+    link_group: Option<PathBuf>,
     xattrs: Xattrs,
 }
 
@@ -165,6 +169,15 @@ fn describe(path: &Path, a: &Entry, b: &Entry) -> String {
             a.nlink.unwrap_or(0),
             b.nlink.unwrap_or(0)
         ),
+        _ if a.link_group != b.link_group => format!(
+            "enlace duro con otro archivo en {p}: {} → {}",
+            a.link_group
+                .as_deref()
+                .map_or("ninguno".into(), |g| g.display().to_string()),
+            b.link_group
+                .as_deref()
+                .map_or("ninguno".into(), |g| g.display().to_string())
+        ),
         _ => {
             let names = a
                 .xattrs
@@ -193,6 +206,8 @@ fn scan(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
 fn scan_with_nested(root: &Path) -> Result<(BTreeMap<PathBuf, Entry>, Vec<PathBuf>)> {
     let mut out = BTreeMap::new();
     let mut nested = Vec::new();
+    // (dispositivo, inodo) → rutas, para los archivos con varios enlaces.
+    let mut inodes: BTreeMap<(u64, u64), Vec<PathBuf>> = BTreeMap::new();
     for item in WalkDir::new(root).follow_links(false) {
         let item = item.with_context(|| format!("recorriendo {}", root.display()))?;
         let path = item.path();
@@ -223,10 +238,17 @@ fn scan_with_nested(root: &Path) -> Result<(BTreeMap<PathBuf, Entry>, Vec<PathBu
         } else {
             rel.to_path_buf()
         };
+        if !ft.is_dir() && md.nlink() > 1 {
+            inodes
+                .entry((md.dev(), md.ino()))
+                .or_default()
+                .push(rel.clone());
+        }
         out.insert(
             rel,
             Entry {
                 nlink: (!ft.is_dir()).then(|| md.nlink()),
+                link_group: None,
                 kind,
                 mode: md.mode() & 0o7777,
                 uid: md.uid(),
@@ -236,6 +258,14 @@ fn scan_with_nested(root: &Path) -> Result<(BTreeMap<PathBuf, Entry>, Vec<PathBu
                 })?,
             },
         );
+    }
+    for paths in inodes.into_values() {
+        let first = paths.iter().min().expect("al menos una ruta").clone();
+        for p in paths {
+            if let Some(e) = out.get_mut(&p) {
+                e.link_group = Some(first.clone());
+            }
+        }
     }
     Ok((out, nested))
 }
@@ -302,6 +332,36 @@ mod tests {
         // b.bin and docs/duro are no longer hard links to each other.
         assert!(all.contains("enlaces duros distinto en b.bin: 2 → 1"));
         assert!(all.contains("enlaces duros distinto en docs/duro: 2 → 1"));
+    }
+
+    #[test]
+    fn metadata_detects_rewired_hard_links() {
+        // Mismo contenido y mismos recuentos (2 y 2), pero emparejados de
+        // otra forma: a↔b y c↔d en el original, a↔c y b↔d en la copia.
+        let (x, y) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        for root in [x.path(), y.path()] {
+            fs::write(root.join("a"), "igual").unwrap();
+            fs::write(root.join("c"), "igual").unwrap();
+        }
+        fs::hard_link(x.path().join("a"), x.path().join("b")).unwrap();
+        fs::hard_link(x.path().join("c"), x.path().join("d")).unwrap();
+        fs::hard_link(y.path().join("a"), y.path().join("c2")).unwrap();
+        fs::rename(y.path().join("c2"), y.path().join("b")).unwrap();
+        fs::remove_file(y.path().join("c")).unwrap();
+        fs::hard_link(y.path().join("a"), y.path().join("c")).unwrap();
+        fs::remove_file(y.path().join("b")).unwrap();
+        fs::write(y.path().join("b"), "igual").unwrap();
+        fs::hard_link(y.path().join("b"), y.path().join("d")).unwrap();
+        let c = compare_metadata(x.path(), y.path()).unwrap().comparison;
+        let all = c.differences.join("\n");
+        assert!(
+            all.contains("enlace duro con otro archivo en c: c → a"),
+            "{all}"
+        );
+        assert!(
+            all.contains("enlace duro con otro archivo en b: a → b"),
+            "{all}"
+        );
     }
 
     #[test]

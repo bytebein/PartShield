@@ -14,7 +14,20 @@ use crate::types::Artifact;
 
 /// 4 KiB of this pattern is a data block that appears nowhere else in the
 /// scratch image, so the test can find it and damage it.
-const MARKER: &[u8; 16] = b"PARTSHIELD-SCRUB";
+/// Contenido de `marcador.bin`: 1 MiB pseudoaleatorio. Tiene que ser
+/// incompresible porque la imagen temporal se monta con `compress=zstd`; un
+/// patrón repetido se guardaría comprimido y no se encontraría en la imagen.
+fn marker() -> Vec<u8> {
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    (0..1 << 20)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 56) as u8
+        })
+        .collect()
+}
 const BLOCK: usize = 4096;
 
 fn enabled() -> bool {
@@ -79,7 +92,7 @@ fn fill(dir: &Path) {
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
         .collect();
     fs::write(dir.join("fotos/2026/grande.bin"), noise).unwrap();
-    fs::write(dir.join("marcador.bin"), MARKER.repeat(64 * 1024)).unwrap();
+    fs::write(dir.join("marcador.bin"), marker()).unwrap();
     fs::write(dir.join("secreto"), "solo para mí").unwrap();
     fs::set_permissions(dir.join("secreto"), fs::Permissions::from_mode(0o600)).unwrap();
     symlink("fotos/2026/grande.bin", dir.join("enlace")).unwrap();
@@ -106,7 +119,8 @@ fn statuses(v: &Verification) -> Vec<(&'static str, StepStatus)> {
 fn damage_marker(image: &Path) -> Result<()> {
     guard_path(image)?;
     let mut f = fs::OpenOptions::new().read(true).write(true).open(image)?;
-    let want = MARKER.repeat(BLOCK / MARKER.len());
+    // El primer bloque del marcador; Btrfs alinea los datos a 4 KiB.
+    let want = marker()[..BLOCK].to_vec();
     let mut buf = vec![0u8; 1 << 20];
     let mut base = 0u64;
     loop {

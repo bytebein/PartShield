@@ -934,11 +934,14 @@ fn result_view(nav: &adw::NavigationView, report: &Report, path: &std::path::Pat
             "success",
             "Se ha restaurado, montado y comparado con el original sin diferencias.".to_string(),
         ),
+        // Reducida no es válida: falta algún paso, así que no se da por buena.
         (Verdict::Reduced, _) => (
             "dialog-warning-symbolic",
-            "Copia válida, con pasos omitidos",
+            "Copia sin verificar del todo",
             "warning",
-            "No falló nada, pero algún paso de la verificación no se pudo hacer.".to_string(),
+            "No falló nada, pero algún paso de la verificación se omitió. Revisa abajo \
+             cuál antes de fiarte de esta copia."
+                .to_string(),
         ),
         (Verdict::Invalid, _) => (
             "dialog-error-symbolic",

@@ -63,21 +63,6 @@ fn finds_parent_disk() {
 }
 
 #[test]
-fn spots_mounted_partitions() {
-    assert!(is_disk_or_partition("/dev/loop1", "/dev/loop1"));
-    assert!(is_disk_or_partition("/dev/loop1p2", "/dev/loop1"));
-    assert!(!is_disk_or_partition("/dev/loop10", "/dev/loop1"));
-    assert!(is_disk_or_partition("/dev/sda1", "/dev/sda"));
-    assert!(!is_disk_or_partition("/dev/sdab", "/dev/sda"));
-    let findmnt = "/dev/vda\n/dev/loop10[/@]\n/dev/loop1p2[/@home]\n";
-    assert_eq!(
-        mounted_sources_touch(findmnt, "/dev/loop1").as_deref(),
-        Some("/dev/loop1p2")
-    );
-    assert_eq!(mounted_sources_touch(findmnt, "/dev/loop2"), None);
-}
-
-#[test]
 fn dd_commands_stay_inside_the_partition() {
     let r = dd_read(Path::new("/dev/loop0"), 1048576, 4096).to_string();
     assert_eq!(

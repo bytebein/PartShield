@@ -190,6 +190,7 @@ impl std::fmt::Display for Digest {
 impl Digest {
     pub fn of_file(algo: HashAlgo, path: &Path) -> Result<Self> {
         use anyhow::Context;
+        crate::cmd::guard_path(path)?;
         let mut f =
             std::fs::File::open(path).with_context(|| format!("abriendo {}", path.display()))?;
         let mut h = Hasher::new(algo);

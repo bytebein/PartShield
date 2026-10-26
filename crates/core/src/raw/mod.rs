@@ -19,6 +19,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cmd::{guard_path, Cmd, Session};
+use crate::detect::blockdev::mounts_below;
 use crate::detect::SuperblockExt;
 use crate::types::{
     Artifact, Digest, HashAlgo, Hasher, RawImage, Step, StepStatus, StreamRef, Superblock,
@@ -38,30 +39,30 @@ pub struct RawBackupOptions<'a> {
     pub hash: HashAlgo,
 }
 
-/// Falla si `device` está montado en lectura-escritura.
+/// Falla si `device`, o algo que cuelga de él (particiones, LUKS, LVM),
+/// está montado en lectura-escritura: la imagen saldría incoherente.
 pub fn ensure_not_mounted_rw(s: &mut Session, device: &Path) -> Result<()> {
-    let out = s.run_unchecked(
-        &Cmd::new("findmnt")
-            .arg("-rn")
-            .arg("-o")
-            .arg("TARGET,OPTIONS")
-            .arg("-S")
-            .arg(device),
-    )?;
-    // findmnt sale con 1 cuando no está montado.
-    if !out.success {
-        return Ok(());
+    if let Some(m) = mounts_below(s, device)?.into_iter().find(|m| m.read_write) {
+        bail!(
+            "{} está montado en lectura-escritura en {}; desmóntalo o vuelve a montarlo \
+             en solo lectura (mount -o remount,ro) antes de la imagen sector a sector",
+            m.device,
+            m.target
+        );
     }
-    for line in out.stdout.lines() {
-        let mut cols = line.split_whitespace();
-        let (target, options) = (cols.next().unwrap_or("?"), cols.next().unwrap_or(""));
-        if options.split(',').any(|o| o == "rw") {
-            bail!(
-                "{} está montado en lectura-escritura en {target}; desmóntalo o vuelve a montarlo \
-                 en solo lectura (mount -o remount,ro) antes de la imagen sector a sector",
-                device.display()
-            );
-        }
+    Ok(())
+}
+
+/// Falla si `device` o algo que cuelga de él está montado, aunque sea en
+/// solo lectura: escribir debajo de un sistema montado lo corrompe.
+pub fn ensure_not_mounted(s: &mut Session, device: &Path) -> Result<()> {
+    if let Some(m) = mounts_below(s, device)?.into_iter().next() {
+        bail!(
+            "{} está montado en {}; desmóntalo antes de restaurar sobre {}",
+            m.device,
+            m.target,
+            device.display()
+        );
     }
     Ok(())
 }
@@ -147,6 +148,7 @@ pub fn restore_to(
     target: &Path,
 ) -> Result<Digest> {
     guard_path(target)?;
+    guard_path(&stream.path)?;
     if let Some(want) = &stream.digest {
         let got = Digest::of_file(want.algo, &stream.path)?;
         if got != *want {
@@ -161,7 +163,7 @@ pub fn restore_to(
         .map(|m| m.file_type().is_block_device())
         .unwrap_or(false);
     let mut out = if is_block {
-        ensure_not_mounted_rw(s, target)?;
+        ensure_not_mounted(s, target)?;
         let mut f = OpenOptions::new()
             .write(true)
             .open(target)
@@ -183,7 +185,22 @@ pub fn restore_to(
             .open(target)
             .with_context(|| format!("creando {} (no se sobrescribe)", target.display()))?
     };
+    let res = write_restored(&mut out, stream, raw, is_block);
+    if res.is_err() && !is_block {
+        // El archivo lo hemos creado nosotros: a medias no sirve y bloquearía
+        // un reintento (no se sobrescribe nunca).
+        drop(out);
+        let _ = std::fs::remove_file(target);
+    }
+    res
+}
 
+fn write_restored(
+    out: &mut File,
+    stream: &StreamRef,
+    raw: &RawImage,
+    is_block: bool,
+) -> Result<Digest> {
     let file =
         File::open(&stream.path).with_context(|| format!("abriendo {}", stream.path.display()))?;
     let mut dec = zstd::Decoder::new(file)?;
@@ -235,8 +252,14 @@ pub fn verify(
     scratch_dir: &Path,
 ) -> Result<Verification> {
     std::fs::create_dir_all(scratch_dir)?;
+    // Un directorio temporal propio: dos verificaciones a la vez en el mismo
+    // directorio no se pisan la imagen.
+    let dir = tempfile::Builder::new()
+        .prefix("partshield-raw-verify-")
+        .tempdir_in(scratch_dir)?;
     let mut scratch = Scratch {
-        image: scratch_dir.join(format!("partshield-raw-verify-{}.img", std::process::id())),
+        image: dir.path().join("restaurada.img"),
+        _dir: dir,
         loopdev: None,
         mountpoint: tempfile::Builder::new()
             .prefix("partshield-mnt-")
@@ -306,13 +329,16 @@ pub fn verify(
                         "no es Btrfs; no hay comprobador de estructura para este contenido".into(),
                     );
                 }
-                match scratch.mount_ro(s, &dev) {
-                    Ok(()) => push(
-                        "montaje",
-                        StepStatus::Passed,
-                        "montada en solo lectura".into(),
-                    ),
-                    Err(e) => push(MONTAJE, StepStatus::Failed, format!("{e:#}")),
+                match mountable(s, &dev) {
+                    Some(why_not) => push(MONTAJE, StepStatus::Skipped, why_not),
+                    None => match scratch.mount_ro(s, &dev) {
+                        Ok(()) => push(
+                            MONTAJE,
+                            StepStatus::Passed,
+                            "montada en solo lectura".into(),
+                        ),
+                        Err(e) => push(MONTAJE, StepStatus::Failed, format!("{e:#}")),
+                    },
                 }
             }
         }
@@ -464,8 +490,41 @@ impl<W: Write> Write for Tee<W> {
 }
 
 /// Imagen temporal + loop de solo lectura + montaje, liberados siempre.
+/// `None` si `dev` tiene un sistema de archivos que montar; si no, por qué
+/// se omite el montaje (un disco entero con tabla de particiones, swap…).
+/// Omitirlo deja la copia en «reducida», nunca en «válida».
+fn mountable(s: &mut Session, dev: &str) -> Option<String> {
+    let out = s
+        .run_unchecked(&Cmd::new("blkid").arg("-p").arg("-o").arg("export").arg(dev))
+        .ok()?;
+    let (_, fstype) = crate::detect::blockdev::parse_blkid_export(&out.stdout);
+    let pttype = out
+        .stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("PTTYPE="))
+        .map(str::to_string);
+    match (fstype.as_deref(), pttype) {
+        (Some("swap" | "crypto_LUKS" | "LVM2_member" | "linux_raid_member"), _) => Some(format!(
+            "contiene {}, que no se monta; la comparación bit a bit cubre el contenido",
+            fstype.unwrap_or_default()
+        )),
+        (Some(_), _) => None,
+        (None, Some(pt)) => Some(format!(
+            "es un disco entero con tabla de particiones {pt}; no se monta cada \
+             partición, la comparación bit a bit cubre el contenido"
+        )),
+        (None, None) => Some(
+            "no tiene un sistema de archivos reconocible que montar; la comparación \
+             bit a bit cubre el contenido"
+                .into(),
+        ),
+    }
+}
+
 struct Scratch {
     image: PathBuf,
+    /// Contiene `image`; se borra al soltar `Scratch`, después de la imagen.
+    _dir: tempfile::TempDir,
     loopdev: Option<String>,
     mountpoint: tempfile::TempDir,
     mounted: bool,

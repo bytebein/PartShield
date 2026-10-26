@@ -101,27 +101,56 @@ pub fn load_or_create_key(path: &Path) -> Result<SigningKey> {
                 .with_context(|| format!("leyendo {}", path.display()))?;
             let seed = unhex::<32>(&text, "clave privada")
                 .with_context(|| format!("en {}", path.display()))?;
-            Ok(SigningKey::from_bytes(&seed))
+            let key = SigningKey::from_bytes(&seed);
+            check_public_matches(path, &key)?;
+            Ok(key)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Un .pub sin su clave privada es de otra clave: lo que se firmara
+            // ahora no se podría verificar con él. Mejor parar sin escribir.
+            let public = pub_path(path);
+            if public.exists() {
+                bail!(
+                    "{} existe pero {} no; es la pública de otra clave. Recupera la \
+                     clave privada o aparta {} antes de crear una nueva",
+                    public.display(),
+                    path.display(),
+                    public.display()
+                );
+            }
             let mut seed = [0u8; 32];
             getrandom::fill(&mut seed)
                 .map_err(|e| anyhow::anyhow!("sin aleatoriedad del sistema: {e}"))?;
             let key = SigningKey::from_bytes(&seed);
             super::atomic::write_new(path, format!("{}\n", hex(&seed)).as_bytes(), 0o600)
                 .with_context(|| format!("creando la clave {}", path.display()))?;
-            let public = pub_path(path);
-            if !public.exists() {
-                super::atomic::write_new(
-                    &public,
-                    format!("{}\n", public_key_hex(&key.verifying_key())).as_bytes(),
-                    0o644,
-                )?;
-            }
+            super::atomic::write_new(
+                &public,
+                format!("{}\n", public_key_hex(&key.verifying_key())).as_bytes(),
+                0o644,
+            )?;
             Ok(key)
         }
         Err(e) => Err(e).with_context(|| format!("leyendo {}", path.display())),
     }
+}
+
+/// Si hay `<clave>.pub` junto a la privada, tiene que ser su pública.
+fn check_public_matches(path: &Path, key: &SigningKey) -> Result<()> {
+    let public = pub_path(path);
+    let Ok(text) = std::fs::read_to_string(&public) else {
+        return Ok(());
+    };
+    let want = public_key_hex(&key.verifying_key());
+    if text.trim() != want {
+        bail!(
+            "{} no es la clave pública de {}; los informes firmados no se podrían \
+             verificar con ella (la correcta es {want})",
+            public.display(),
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Escribe `v` en la forma canónica descrita en el módulo.
@@ -295,5 +324,30 @@ mod tests {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
         let err = load_or_create_key(&p).unwrap_err();
         assert!(err.to_string().contains("600"), "{err:#}");
+    }
+
+    #[test]
+    fn refuses_a_public_key_from_another_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("firma.key");
+        let public = dir.path().join("firma.key.pub");
+        // Un .pub huérfano: no se crea una privada que no le corresponda.
+        std::fs::write(&public, "00".repeat(32)).unwrap();
+        let err = load_or_create_key(&p).unwrap_err();
+        assert!(
+            err.to_string().contains("es la pública de otra clave"),
+            "{err:#}"
+        );
+        assert!(!p.exists(), "no se ha escrito ninguna clave privada");
+
+        // Privada y pública que no casan: tampoco se firma con ellas.
+        std::fs::remove_file(&public).unwrap();
+        load_or_create_key(&p).unwrap();
+        std::fs::write(&public, "11".repeat(32)).unwrap();
+        let err = load_or_create_key(&p).unwrap_err();
+        assert!(
+            err.to_string().contains("no es la clave pública"),
+            "{err:#}"
+        );
     }
 }
