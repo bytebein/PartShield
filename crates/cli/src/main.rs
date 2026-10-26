@@ -5,13 +5,14 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use partshield_core::cmd::Session;
 use partshield_core::detect::{modes, SuperblockExt};
+use partshield_core::raw;
 use partshield_core::report::load_prior;
 use partshield_core::send::restore::{restore, RestoreOptions};
 use partshield_core::types::{
     ChecksumStatus, HashAlgo, StepStatus, StreamRef, Superblock, Verdict, Verification,
 };
 use partshield_core::verify::{self, VerifyOptions};
-use partshield_core::{backup, partclone_version, BackupOptions};
+use partshield_core::{backup, backup_raw, partclone_version, BackupOptions, RawOptions};
 
 /// Copias de Btrfs que no se dan por buenas hasta restaurarlas.
 #[derive(Parser)]
@@ -33,10 +34,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Copia un subvolumen con btrfs send y verifica la copia restaurándola.
+    /// Copia y verifica restaurando: un subvolumen con btrfs send (por
+    /// defecto) o un dispositivo entero sector a sector (--mode raw).
     Backup {
-        /// Subvolumen montado que se copia.
+        /// Subvolumen montado (send) o dispositivo/imagen (raw).
         source: PathBuf,
+        /// send: subvolumen con btrfs send. raw: todos los bytes, estilo dd;
+        /// el origen no puede estar montado en lectura-escritura.
+        #[arg(long, value_enum, default_value = "send")]
+        mode: ModeArg,
         /// Carpeta donde se guardan el stream y el informe.
         #[arg(long)]
         dest: PathBuf,
@@ -84,13 +90,20 @@ enum Command {
         /// Informe de la copia: toma de él la cadena y los hashes.
         #[arg(long, conflicts_with = "streams")]
         report: Option<PathBuf>,
-        /// Carpeta del Btrfs de destino.
+        /// send: carpeta del Btrfs de destino. raw: dispositivo al menos igual
+        /// de grande, o un archivo nuevo.
         #[arg(long)]
         to: PathBuf,
         /// Crear además un subvolumen escribible con este nombre (p. ej. home).
         #[arg(long = "as")]
         writable: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ModeArg {
+    Send,
+    Raw,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -143,6 +156,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
         }
         Command::Backup {
             source,
+            mode,
             dest,
             snapshot_dir,
             scratch_dir,
@@ -151,19 +165,36 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             zstd_level,
             hash,
         } => {
-            let (report, path) = backup(
-                s,
-                &BackupOptions {
-                    source: &source,
-                    dest_dir: &dest,
-                    snapshot_dir: snapshot_dir.as_deref(),
-                    scratch_dir: scratch_dir.as_deref(),
-                    keep_snapshot,
-                    zstd_level,
-                    parent_report: parent.as_deref(),
-                    hash: hash.into(),
-                },
-            )?;
+            if matches!(mode, ModeArg::Raw)
+                && (parent.is_some() || keep_snapshot || snapshot_dir.is_some())
+            {
+                bail!("--parent, --keep-snapshot y --snapshot-dir solo valen con --mode send");
+            }
+            let (report, path) = match mode {
+                ModeArg::Raw => backup_raw(
+                    s,
+                    &RawOptions {
+                        device: &source,
+                        dest_dir: &dest,
+                        scratch_dir: scratch_dir.as_deref(),
+                        zstd_level,
+                        hash: hash.into(),
+                    },
+                )?,
+                ModeArg::Send => backup(
+                    s,
+                    &BackupOptions {
+                        source: &source,
+                        dest_dir: &dest,
+                        snapshot_dir: snapshot_dir.as_deref(),
+                        scratch_dir: scratch_dir.as_deref(),
+                        keep_snapshot,
+                        zstd_level,
+                        parent_report: parent.as_deref(),
+                        hash: hash.into(),
+                    },
+                )?,
+            };
             if let Some(a) = &report.artifact {
                 println!(
                     "\nStream: {} ({} bytes, {})",
@@ -189,6 +220,16 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             scratch_gib,
             accept_reduced,
         } => {
+            if let Some((stream, image)) = report
+                .as_deref()
+                .map(raw::load_from_report)
+                .transpose()?
+                .flatten()
+            {
+                let v = raw::verify(s, &stream, &image, &scratch_dir)?;
+                print_verification(&v);
+                return Ok(verdict_exit(v.verdict, accept_reduced));
+            }
             let (chain, snapshot) = chain(report, streams)?;
             // Without --against, compare with the backup's own snapshot if it was kept.
             let reference = against.or(snapshot.filter(|p| p.exists()));
@@ -210,6 +251,19 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             to,
             writable,
         } => {
+            if let Some((stream, image)) = report
+                .as_deref()
+                .map(raw::load_from_report)
+                .transpose()?
+                .flatten()
+            {
+                if writable.is_some() {
+                    bail!("--as solo vale para copias en modo send");
+                }
+                let d = raw::restore_to(s, &stream, &image, &to)?;
+                println!("\nRestaurada bit a bit en {} ({d})", to.display());
+                return Ok(ExitCode::SUCCESS);
+            }
             let (chain, _) = chain(report, streams)?;
             let r = restore(
                 s,

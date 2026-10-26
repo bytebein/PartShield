@@ -7,6 +7,7 @@ La GUI y la ISO esperan; ahora solo se trabaja en el motor (`crates/core`) y la 
 | Módulo | Dueño | Contenido |
 | --- | --- | --- |
 | `types.rs`, `cmd.rs`, `lib.rs`, `crates/cli` | Lead | Tipos compartidos, ejecución de comandos, orquestación |
+| `raw/`, `tests/raw_e2e.rs` | Lead | Imagen sector a sector (estilo dd) y su verificación |
 | `detect/` | Detección | Superbloque, features por modo, LUKS/LVM |
 | `send/` | Modo send | Snapshots, send/receive, zstd, incrementales, restore, tabla de particiones/ESP/UUID |
 | `verify/` | Verificación | Restauración de prueba y comprobaciones |

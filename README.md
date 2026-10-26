@@ -10,7 +10,7 @@ Nace del fallo de partclone con `BLOCK_GROUP_TREE`
 marcadas como correctas que no montaban porque el `chunk_root` nunca se copió.
 
 Esto es la **Fase 0**: el motor en Rust y una CLI. La interfaz gráfica y el live USB
-(Debian estable con Secure Boot) vienen después y usan este mismo motor.
+(Debian 13 *trixie*, la estable actual, con Secure Boot) vienen después y usan este mismo motor.
 
 ## Qué hace
 
@@ -20,6 +20,12 @@ Esto es la **Fase 0**: el motor en Rust y una CLI. La interfaz gráfica y el liv
 - **`backup`**: snapshot de solo lectura → `btrfs send` comprimido con zstd → verificación.
   Con `--parent <informe>` la copia es incremental (`btrfs send -p`) sobre una copia
   anterior **válida** cuyo snapshot se conservó (`--keep-snapshot`).
+- **`backup --mode raw`**: imagen sector a sector del dispositivo entero, al estilo de
+  `dd`, comprimida con zstd. Sirve para lo que no sea Btrfs o tenga features no
+  probadas. Se niega si el origen está montado en lectura-escritura. Su verificación
+  exige que los bytes restaurados den el mismo hash que el dispositivo, monta la copia,
+  pasa `btrfs check` si es Btrfs y relee 64 trozos del origen para detectar cambios.
+  `restore` la escribe en un dispositivo igual o mayor, o en un archivo nuevo disperso.
 - **`restore`**: restaura la cadena (completa + incrementales) en un Btrfs montado y,
   con `--as`, deja un subvolumen escribible. Comprueba el BLAKE3 de cada stream
   **antes** de recibirlo: un archivo dañado no llega a aplicarse a medias.
@@ -61,13 +67,18 @@ sudo target/release/partshield verify --report /mnt/usb/copias/home-XXXX.report.
 # Restaurar en otro Btrfs y dejar /mnt/nuevo/home escribible
 sudo target/release/partshield restore --report /mnt/usb/copias/home-XXXX.report.json \
     --to /mnt/nuevo --as home
+
+# Imagen sector a sector de una partición desmontada (o montada en solo lectura)
+sudo target/release/partshield backup --mode raw /dev/sdb2 --dest /mnt/usb/copias
+sudo target/release/partshield restore --report /mnt/usb/copias/sdb2-XXXX.report.json --to /dev/sdc2
 ```
 
 ## Tests
 
 ```sh
 cargo test                                  # unitarios
-sudo PARTSHIELD_E2E=1 cargo test --test e2e # Btrfs real con BLOCK_GROUP_TREE en loop
+sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_E2E=1 cargo test --test e2e     # puerta de la Fase 0
+sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_E2E=1 cargo test --test raw_e2e # modo raw
 ```
 
 El test de punta a punta crea un Btrfs con `block-group-tree` y comprueba:
@@ -82,9 +93,9 @@ El test de punta a punta crea un Btrfs con `block-group-tree` y comprueba:
 ## Pendiente
 
 - Varios subvolúmenes y tabla de particiones/ESP en una sola copia
-- Modos partclone y sector a sector
+- Modo partclone
 - Informe HTML firmado con ed25519
 - Interfaz gráfica (gtk4-rs + libadwaita)
-- Live USB con live-build sobre Debian estable: Secure Boot con shim-signed y el kernel
+- Live USB con live-build sobre Debian 13 *trixie* (la estable actual): Secure Boot con shim-signed y el kernel
   firmado de Debian, btrfs-progs y partclone compilados y fijados, y arranque probado
   en QEMU con BIOS, UEFI y Secure Boot

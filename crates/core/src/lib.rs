@@ -7,6 +7,7 @@
 //! Propiedad de cada módulo (equipo de la Fase 0):
 //! - `types`, `cmd`, `lib`: lead (tipos compartidos, orquestación)
 //! - `detect`: superbloque, features, modos seguros, LUKS/LVM
+//! - `raw`: imagen sector a sector (lead)
 //! - `send`: snapshots, send/receive, zstd, incrementales, disposición del disco
 //! - `verify`: restauración de prueba y comprobaciones
 //! - `report`: JSON, HTML, firma
@@ -14,6 +15,7 @@
 
 pub mod cmd;
 pub mod detect;
+pub mod raw;
 pub mod report;
 pub mod send;
 pub mod types;
@@ -91,6 +93,7 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
         hash_algo: opts.hash,
         artifact: None,
         layout: None,
+        raw: None,
         parent_report: opts.parent_report.map(Path::to_path_buf),
         chain: Vec::new(),
         verification: None,
@@ -175,6 +178,89 @@ fn run_backup(
     Ok(())
 }
 
+pub struct RawOptions<'a> {
+    /// Dispositivo o archivo de imagen a copiar entero. No puede estar
+    /// montado en lectura-escritura.
+    pub device: &'a Path,
+    pub dest_dir: &'a Path,
+    pub scratch_dir: Option<&'a Path>,
+    pub zstd_level: i32,
+    pub hash: HashAlgo,
+}
+
+/// Imagen sector a sector → verificación, siempre con informe.
+pub fn backup_raw(s: &mut Session, opts: &RawOptions) -> Result<(Report, PathBuf)> {
+    let started = Local::now();
+    std::fs::create_dir_all(opts.dest_dir)?;
+    let dest_dir = opts.dest_dir.canonicalize()?;
+    let stem = format!(
+        "{}-{}",
+        base_name(opts.device),
+        started.format("%Y%m%d-%H%M%S")
+    );
+    let name = unique_name(&stem, &dest_dir, &dest_dir);
+    let report_path = dest_dir.join(format!("{name}.report.json"));
+
+    let mut report = Report {
+        schema_version: SCHEMA_VERSION,
+        tool: "partshield",
+        version: env!("CARGO_PKG_VERSION"),
+        started,
+        finished: started,
+        source: opts.device.to_path_buf(),
+        device: Some(opts.device.to_path_buf()),
+        block_stack: None,
+        superblock: None,
+        modes: Vec::new(),
+        mode: types::Mode::Raw,
+        hash_algo: opts.hash,
+        artifact: None,
+        layout: None,
+        raw: None,
+        parent_report: None,
+        chain: Vec::new(),
+        verification: None,
+        commands: Vec::new(),
+        error: None,
+        signature: None,
+    };
+
+    let run = |s: &mut Session, report: &mut Report| -> Result<()> {
+        // Si es Btrfs, se registra lo detectado; la imagen raw vale igual si no lo es.
+        if let Ok(sb) = Superblock::read_from(opts.device) {
+            report.modes = modes::assess(&sb.features, partclone_version(s));
+            report.superblock = Some(sb);
+        }
+        let (artifact, image) = raw::backup(
+            s,
+            &raw::RawBackupOptions {
+                device: opts.device,
+                dest_dir: &dest_dir,
+                name: &name,
+                zstd_level: opts.zstd_level,
+                hash: opts.hash,
+            },
+        )?;
+        report.chain = vec![artifact.stream_ref()];
+        report.artifact = Some(artifact);
+        report.raw = Some(image.clone());
+        report.verification = Some(raw::verify(
+            s,
+            &report.chain[0],
+            &image,
+            opts.scratch_dir.unwrap_or(&dest_dir),
+        )?);
+        Ok(())
+    };
+    if let Err(e) = run(s, &mut report) {
+        report.error = Some(format!("{e:#}"));
+    }
+    report.finished = Local::now();
+    report.commands = std::mem::take(&mut s.records);
+    report.write_json(&report_path)?;
+    Ok((report, report_path))
+}
+
 /// First of `stem`, `stem-1`, `stem-2`… that no earlier backup used, so a
 /// second backup in the same second never touches the first one's files.
 fn unique_name(stem: &str, dest_dir: &Path, snapshot_dir: &Path) -> String {
@@ -187,6 +273,7 @@ fn unique_name(stem: &str, dest_dir: &Path, snapshot_dir: &Path) -> String {
             let taken = [
                 dest_dir.join(format!("{n}.report.json")),
                 dest_dir.join(format!("{n}.btrfs.zst")),
+                dest_dir.join(format!("{n}.raw.zst")),
                 snapshot_dir.join(format!(".partshield-{n}")),
             ];
             !taken.iter().any(|p| p.exists())

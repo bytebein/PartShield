@@ -363,6 +363,17 @@ pub struct DiskLayout {
     pub notes: Vec<String>,
 }
 
+/// Datos propios de una imagen sector a sector (modo raw).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RawImage {
+    /// Dispositivo (o archivo) leído entero.
+    pub device: PathBuf,
+    pub size_bytes: u64,
+    /// Hash de los bytes del dispositivo tal cual, sin comprimir: una
+    /// restauración es exacta si reproduce este mismo hash.
+    pub content_digest: Digest,
+}
+
 // ---------------------------------------------------------- verificación
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -435,6 +446,8 @@ pub struct Report {
     pub hash_algo: HashAlgo,
     pub artifact: Option<Artifact>,
     pub layout: Option<DiskLayout>,
+    /// Solo en modo raw.
+    pub raw: Option<RawImage>,
     /// Informe de la copia sobre la que esta es incremental.
     pub parent_report: Option<PathBuf>,
     /// Streams a restaurar en orden para obtener esta copia, la base primero.
