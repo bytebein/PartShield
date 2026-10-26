@@ -299,16 +299,16 @@ impl StreamRef {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifact {
     pub stream: PathBuf,
     pub snapshot: PathBuf,
     pub digest: Digest,
     pub compressed_bytes: u64,
     pub stream_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<Encryption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks: Option<Chunking>,
 }
 
@@ -353,11 +353,14 @@ pub enum LayerKind {
 
 /// Lo que un sistema necesita además de sus subvolúmenes para arrancar
 /// (send: tabla de particiones, ESP, UUID).
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiskLayout {
     pub fs_uuid: Option<String>,
-    /// Copia de la tabla de particiones (`sgdisk --backup`).
+    /// Copia de la tabla de particiones (`sgdisk --backup`; solo GPT).
     pub partition_table: Option<StreamRef>,
+    /// `sfdisk --dump`: legible, y restaurable también en MBR.
+    #[serde(default)]
+    pub partition_table_dump: Option<StreamRef>,
     /// Imagen de la partición EFI.
     pub esp: Option<StreamRef>,
     pub notes: Vec<String>,
@@ -372,6 +375,20 @@ pub struct RawImage {
     /// Hash de los bytes del dispositivo tal cual, sin comprimir: una
     /// restauración es exacta si reproduce este mismo hash.
     pub content_digest: Digest,
+}
+
+/// Un subvolumen dentro de una copia de varios (`@`, `@home`…).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubvolArtifact {
+    /// Nombre estable entre copias: enlaza cada subvolumen con su copia anterior.
+    pub label: String,
+    pub source: PathBuf,
+    pub artifact: Artifact,
+    /// Snapshot de la copia anterior usado con `btrfs send -p`; `None` si
+    /// este stream es completo.
+    pub parent: Option<PathBuf>,
+    /// Streams a restaurar en orden para este subvolumen, la base primero.
+    pub chain: Vec<StreamRef>,
 }
 
 // ---------------------------------------------------------- verificación
@@ -448,6 +465,10 @@ pub struct Report {
     pub layout: Option<DiskLayout>,
     /// Solo en modo raw.
     pub raw: Option<RawImage>,
+    /// Copias de varios subvolúmenes; vacío en las de uno solo (que usan
+    /// `artifact` y `chain`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subvolumes: Vec<SubvolArtifact>,
     /// Informe de la copia sobre la que esta es incremental.
     pub parent_report: Option<PathBuf>,
     /// Streams a restaurar en orden para obtener esta copia, la base primero.

@@ -28,8 +28,12 @@ use chrono::Local;
 
 use cmd::{Cmd, Session};
 use detect::{modes, SuperblockExt};
+use send::multi::SubvolSpec;
 use send::SendMode;
-use types::{BackupMode, BackupRequest, HashAlgo, Report, Superblock, Version, SCHEMA_VERSION};
+use types::{
+    BackupMode, BackupRequest, HashAlgo, Report, SubvolArtifact, Superblock, Version,
+    SCHEMA_VERSION,
+};
 use verify::VerifyOptions;
 
 pub struct BackupOptions<'a> {
@@ -45,6 +49,12 @@ pub struct BackupOptions<'a> {
     pub hash: HashAlgo,
     /// Clave ed25519 con la que firmar el informe (se crea si no existe).
     pub sign_key: Option<&'a Path>,
+    /// Varios subvolúmenes en una copia (`@`, `@home`…). Vacío: solo `source`.
+    pub subvolumes: &'a [SubvolSpec<'a>],
+    /// Guardar aparte tabla de particiones, ESP y UUID del sistema de archivos.
+    pub capture_layout: bool,
+    /// Disco que contiene el Btrfs, si no se puede deducir con lsblk.
+    pub disk: Option<&'a Path>,
 }
 
 /// Installed partclone.btrfs version, if any.
@@ -96,6 +106,7 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
         artifact: None,
         layout: None,
         raw: None,
+        subvolumes: Vec::new(),
         parent_report: opts.parent_report.map(Path::to_path_buf),
         chain: Vec::new(),
         verification: None,
@@ -122,6 +133,8 @@ fn run_backup(
     report: &mut Report,
 ) -> Result<()> {
     let prior = match opts.parent_report {
+        // En una copia de varios subvolúmenes el padre se lee en run_multi.
+        Some(_) if !opts.subvolumes.is_empty() => None,
         None => None,
         Some(p) => {
             let prior = report::load_prior(p)?;
@@ -144,8 +157,25 @@ fn run_backup(
     let device = send::backing_device(s, opts.source)?;
     let sb = inspect_device(s, &device, report)?;
     let scratch_size = sb.bytes_used.saturating_mul(2).max(1 << 30);
-    report.device = Some(device);
+    report.device = Some(device.clone());
     report.superblock = Some(sb);
+
+    if opts.capture_layout {
+        report.layout = Some(send::layout::capture_with(
+            s,
+            &send::layout::CaptureOptions {
+                fs_device: &device,
+                disk: opts.disk,
+                dest_dir: opts.dest_dir,
+                name,
+                zstd_level: opts.zstd_level,
+                hash: opts.hash,
+            },
+        )?);
+    }
+    if !opts.subvolumes.is_empty() {
+        return run_multi(s, opts, name, scratch_size, report);
+    }
 
     let artifact = mode.backup(
         s,
@@ -178,6 +208,142 @@ fn run_backup(
     }
     report.verification = Some(verification?);
     Ok(())
+}
+
+/// Varios subvolúmenes: cada uno con su cadena, verificados uno a uno.
+fn run_multi(
+    s: &mut Session,
+    opts: &BackupOptions,
+    name: &str,
+    scratch_size: u64,
+    report: &mut Report,
+) -> Result<()> {
+    let previous = match opts.parent_report {
+        None => Vec::new(),
+        Some(p) => prior_subvolumes(p)?,
+    };
+    let items = send::multi::send_many(
+        s,
+        &send::multi::MultiSendOptions {
+            subvolumes: opts.subvolumes,
+            dest_dir: opts.dest_dir,
+            snapshot_dir: opts.snapshot_dir,
+            name,
+            zstd_level: opts.zstd_level,
+            hash: opts.hash,
+            previous: &previous,
+        },
+    )?;
+    report.subvolumes = items.clone();
+    let verification = verify_subvolumes(
+        s,
+        &items,
+        opts.scratch_dir.unwrap_or(opts.dest_dir),
+        scratch_size,
+    );
+    if !opts.keep_snapshot {
+        for it in &items {
+            send::delete_subvolume(s, &it.artifact.snapshot)?;
+        }
+    }
+    report.verification = Some(verification?);
+    Ok(())
+}
+
+/// Subvolúmenes de una copia anterior válida, con los streams buscados junto
+/// al informe si el disco de copias se montó en otra ruta.
+pub fn prior_subvolumes(report_path: &Path) -> Result<Vec<SubvolArtifact>> {
+    let v = report::load_report_value(report_path)?;
+    let valid = v["error"].is_null() && v["verification"]["verdict"] == "valid";
+    if !valid {
+        bail!(
+            "la copia de {} no es válida; no se encadena una incremental a ella",
+            report_path.display()
+        );
+    }
+    let mut items: Vec<SubvolArtifact> = serde_json::from_value(v["subvolumes"].clone())
+        .ok()
+        .filter(|i: &Vec<SubvolArtifact>| !i.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} no es una copia de varios subvolúmenes",
+                report_path.display()
+            )
+        })?;
+    let dir = report_path.parent().unwrap_or(Path::new("."));
+    for it in &mut items {
+        for link in &mut it.chain {
+            if !link.path.exists() {
+                if let Some(f) = link.path.file_name() {
+                    link.path = dir.join(f);
+                }
+            }
+        }
+    }
+    Ok(items)
+}
+
+/// Verifica cada subvolumen restaurando su cadena y comparándolo con su
+/// snapshot. El resultado tiene los cinco pasos de siempre: cada paso toma
+/// el peor estado de todos los subvolúmenes y junta sus detalles.
+pub fn verify_subvolumes(
+    s: &mut Session,
+    items: &[SubvolArtifact],
+    scratch_dir: &Path,
+    scratch_size: u64,
+) -> Result<types::Verification> {
+    use types::{Step, StepStatus};
+    let mut each = Vec::new();
+    for it in items {
+        let reference = it
+            .artifact
+            .snapshot
+            .exists()
+            .then_some(it.artifact.snapshot.as_path());
+        let v = verify::verify(
+            s,
+            &VerifyOptions {
+                streams: &it.chain,
+                reference,
+                scratch_dir,
+                scratch_size,
+            },
+        )?;
+        each.push((it.label.as_str(), v));
+    }
+    let steps: Vec<Step> = verify::STEPS
+        .iter()
+        .map(|&name| {
+            let mine: Vec<(&str, &Step)> = each
+                .iter()
+                .filter_map(|(l, v)| v.steps.iter().find(|st| st.name == name).map(|st| (*l, st)))
+                .collect();
+            let status = if mine.len() != items.len()
+                || mine.iter().any(|(_, st)| st.status == StepStatus::Failed)
+            {
+                StepStatus::Failed
+            } else if mine.iter().any(|(_, st)| st.status == StepStatus::Skipped) {
+                StepStatus::Skipped
+            } else {
+                StepStatus::Passed
+            };
+            let detail = mine
+                .iter()
+                .map(|(l, st)| format!("{l}: {}", st.detail))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            Step {
+                name,
+                status,
+                detail,
+            }
+        })
+        .collect();
+    Ok(types::Verification {
+        verdict: verify::verdict_of(&steps),
+        steps,
+        comparison: None,
+    })
 }
 
 pub struct RawOptions<'a> {
@@ -220,6 +386,7 @@ pub fn backup_raw(s: &mut Session, opts: &RawOptions) -> Result<(Report, PathBuf
         artifact: None,
         layout: None,
         raw: None,
+        subvolumes: Vec::new(),
         parent_report: None,
         chain: Vec::new(),
         verification: None,
@@ -327,14 +494,19 @@ fn unique_name(stem: &str, dest_dir: &Path, snapshot_dir: &Path) -> String {
             i => format!("{stem}-{i}"),
         })
         .find(|n| {
-            let taken = [
-                dest_dir.join(format!("{n}.report.json")),
-                dest_dir.join(format!("{n}.report.html")),
-                dest_dir.join(format!("{n}.btrfs.zst")),
-                dest_dir.join(format!("{n}.raw.zst")),
-                snapshot_dir.join(format!(".partshield-{n}")),
-            ];
-            !taken.iter().any(|p| p.exists())
+            // Cualquier archivo de esa copia: informe, streams, tabla, ESP,
+            // subvolúmenes (`<n>--<etiqueta>…`).
+            let (dot, sub) = (format!("{n}."), format!("{n}--"));
+            let in_dest = std::fs::read_dir(dest_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|e| {
+                    let f = e.file_name();
+                    let f = f.to_string_lossy();
+                    f.starts_with(&dot) || f.starts_with(&sub)
+                });
+            !in_dest && !snapshot_dir.join(format!(".partshield-{n}")).exists()
         })
         .expect("an unused name exists")
 }

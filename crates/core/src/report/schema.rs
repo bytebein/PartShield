@@ -307,11 +307,26 @@ mod tests {
         let v = serde_json::to_value(sample::report()).unwrap();
         let s = schema();
         let props = s["properties"].as_object().unwrap();
-        let mut a: Vec<_> = v.as_object().unwrap().keys().collect();
-        let mut b: Vec<_> = props.keys().collect();
-        a.sort();
-        b.sort();
-        assert_eq!(a, b);
+        let present: Vec<_> = v.as_object().unwrap().keys().collect();
+        let required: Vec<_> = s["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        // Todo lo que se escribe está descrito, y todo lo obligatorio se escribe.
+        for k in &present {
+            assert!(props.contains_key(*k), "{k} no está en el esquema");
+        }
+        for r in &required {
+            assert!(present.iter().any(|k| k == r), "{r} es obligatorio y falta");
+        }
+        // Lo que el esquema describe y no es obligatorio debe ser opcional a propósito.
+        let optional: Vec<_> = props
+            .keys()
+            .filter(|k| !required.contains(&k.as_str()))
+            .collect();
+        assert_eq!(optional, ["subvolumes"]);
         assert_eq!(s["properties"]["schema_version"]["const"], SCHEMA_VERSION);
     }
 

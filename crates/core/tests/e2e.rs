@@ -114,6 +114,9 @@ fn backup_verify_and_detect_corruption() {
             parent_report: None,
             hash: HashAlgo::Blake3,
             sign_key: None,
+            subvolumes: &[],
+            capture_layout: false,
+            disk: None,
         },
     )
     .unwrap();
@@ -231,6 +234,9 @@ fn backup_verify_and_detect_corruption() {
             parent_report: Some(&report_path),
             hash: HashAlgo::Blake3,
             sign_key: None,
+            subvolumes: &[],
+            capture_layout: false,
+            disk: None,
         },
     )
     .unwrap();
@@ -308,6 +314,9 @@ fn backup_verify_and_detect_corruption() {
             parent_report: Some(&bad_report),
             hash: HashAlgo::Blake3,
             sign_key: None,
+            subvolumes: &[],
+            capture_layout: false,
+            disk: None,
         },
     )
     .unwrap();

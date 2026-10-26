@@ -7,15 +7,14 @@
 //! etiqueta, y su `chain` es la cadena anterior más el stream nuevo.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
 
 use super::restore::{restore, RestoreOptions, Restored};
 use super::{check_digest, delete_subvolume, preflight, send_prepared, SendOptions};
 use crate::cmd::Session;
-use crate::types::{Artifact, HashAlgo, StreamRef};
+use crate::types::HashAlgo;
 
 /// Un subvolumen a copiar.
 #[derive(Debug, Clone, Copy)]
@@ -26,18 +25,7 @@ pub struct SubvolSpec<'a> {
     pub source: &'a Path,
 }
 
-/// Resultado de un subvolumen dentro de una copia de varios.
-#[derive(Debug, Clone, Serialize)]
-pub struct SubvolArtifact {
-    pub label: String,
-    pub source: PathBuf,
-    pub artifact: Artifact,
-    /// Snapshot de la copia anterior usado con `btrfs send -p`; `None` si
-    /// este stream es completo.
-    pub parent: Option<PathBuf>,
-    /// Streams a restaurar en orden para este subvolumen, la base primero.
-    pub chain: Vec<StreamRef>,
-}
+pub use crate::types::SubvolArtifact;
 
 pub struct MultiSendOptions<'a> {
     pub subvolumes: &'a [SubvolSpec<'a>],
@@ -203,7 +191,7 @@ mod tests {
     use crate::cmd::Cmd;
     use crate::send::testutil::{btrfs, e2e_enabled, run, Cleanup};
     use crate::send::{send, SendPaths};
-    use crate::types::Digest;
+    use crate::types::{Artifact, Digest};
     use crate::verify::compare::compare_trees;
 
     #[test]

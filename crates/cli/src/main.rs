@@ -7,11 +7,15 @@ use partshield_core::cmd::Session;
 use partshield_core::detect::{modes, SuperblockExt};
 use partshield_core::raw;
 use partshield_core::report::{load_prior, sign};
+use partshield_core::send::layout;
+use partshield_core::send::multi::{restore_many, SubvolSpec};
 use partshield_core::send::restore::{restore, RestoreOptions};
 use partshield_core::types::{
     ChecksumStatus, HashAlgo, StepStatus, StreamRef, Superblock, Verdict, Verification,
 };
+use partshield_core::types::{DiskLayout, SubvolArtifact};
 use partshield_core::verify::{self, VerifyOptions};
+use partshield_core::verify_subvolumes;
 use partshield_core::{backup, backup_raw, partclone_version, BackupOptions, RawOptions};
 
 /// Copias de Btrfs que no se dan por buenas hasta restaurarlas.
@@ -37,8 +41,19 @@ enum Command {
     /// Copia y verifica restaurando: un subvolumen con btrfs send (por
     /// defecto) o un dispositivo entero sector a sector (--mode raw).
     Backup {
-        /// Subvolumen montado (send) o dispositivo/imagen (raw).
-        source: PathBuf,
+        /// Subvolumen montado (send) o dispositivo/imagen (raw). Con --subvol
+        /// se puede omitir.
+        source: Option<PathBuf>,
+        /// Copiar varios subvolúmenes en una copia: ETIQUETA=RUTA (repetible),
+        /// p. ej. --subvol @=/ --subvol @home=/home.
+        #[arg(long = "subvol", value_name = "ETIQUETA=RUTA")]
+        subvols: Vec<String>,
+        /// Guardar también tabla de particiones, ESP y UUID del sistema de archivos.
+        #[arg(long)]
+        layout: bool,
+        /// Disco que contiene el Btrfs, si no se deduce solo (con --layout).
+        #[arg(long)]
+        disk: Option<PathBuf>,
         /// send: subvolumen con btrfs send. raw: todos los bytes, estilo dd;
         /// el origen no puede estar montado en lectura-escritura.
         #[arg(long, value_enum, default_value = "send")]
@@ -67,6 +82,18 @@ enum Command {
         /// 0600 si no existe; la pública queda en <ruta>.pub).
         #[arg(long)]
         sign_key: Option<PathBuf>,
+    },
+    /// Restaura la tabla de particiones y la ESP guardadas con --layout en un
+    /// disco, y opcionalmente el UUID original en un Btrfs ya restaurado.
+    RestoreLayout {
+        #[arg(long)]
+        report: PathBuf,
+        /// Disco de destino (se reescriben su tabla y su ESP).
+        #[arg(long)]
+        disk: PathBuf,
+        /// Btrfs restaurado y desmontado al que poner el UUID original.
+        #[arg(long)]
+        btrfs_dev: Option<PathBuf>,
     },
     /// Comprueba la firma ed25519 de un informe.
     VerifyReport {
@@ -167,6 +194,9 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
         }
         Command::Backup {
             source,
+            subvols,
+            layout,
+            disk,
             mode,
             dest,
             snapshot_dir,
@@ -181,6 +211,27 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                 && (parent.is_some() || keep_snapshot || snapshot_dir.is_some())
             {
                 bail!("--parent, --keep-snapshot y --snapshot-dir solo valen con --mode send");
+            }
+            let specs: Vec<(String, PathBuf)> = subvols
+                .iter()
+                .map(|s| match s.split_once('=') {
+                    Some((l, p)) if !l.is_empty() && !p.is_empty() => {
+                        Ok((l.to_string(), PathBuf::from(p)))
+                    }
+                    _ => Err(anyhow::anyhow!("--subvol espera ETIQUETA=RUTA, no {s:?}")),
+                })
+                .collect::<Result<_>>()?;
+            let subvolumes: Vec<SubvolSpec> = specs
+                .iter()
+                .map(|(label, source)| SubvolSpec { label, source })
+                .collect();
+            let source = match (source, specs.first()) {
+                (Some(s), _) => s,
+                (None, Some((_, first))) => first.clone(),
+                (None, None) => bail!("indica el origen o al menos un --subvol"),
+            };
+            if matches!(mode, ModeArg::Raw) && (!subvolumes.is_empty() || layout) {
+                bail!("--subvol y --layout solo valen con --mode send");
             }
             let (report, path) = match mode {
                 ModeArg::Raw => backup_raw(
@@ -206,9 +257,33 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                         parent_report: parent.as_deref(),
                         hash: hash.into(),
                         sign_key: sign_key.as_deref(),
+                        subvolumes: &subvolumes,
+                        capture_layout: layout,
+                        disk: disk.as_deref(),
                     },
                 )?,
             };
+            for it in &report.subvolumes {
+                println!(
+                    "Subvolumen {}: {} ({} bytes, {})",
+                    it.label,
+                    it.artifact.stream.display(),
+                    it.artifact.compressed_bytes,
+                    it.artifact.digest
+                );
+            }
+            if let Some(l) = &report.layout {
+                println!(
+                    "Disposición: UUID {}, tabla {}, ESP {}",
+                    l.fs_uuid.as_deref().unwrap_or("?"),
+                    if l.partition_table.is_some() {
+                        "guardada"
+                    } else {
+                        "no"
+                    },
+                    if l.esp.is_some() { "guardada" } else { "no" }
+                );
+            }
             if let Some(a) = &report.artifact {
                 println!(
                     "\nStream: {} ({} bytes, {})",
@@ -248,6 +323,11 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                 print_verification(&v);
                 return Ok(verdict_exit(v.verdict, accept_reduced));
             }
+            if let Some(items) = report.as_deref().and_then(|p| multi_items(p).transpose()) {
+                let v = verify_subvolumes(s, &items?, &scratch_dir, scratch_gib << 30)?;
+                print_verification(&v);
+                return Ok(verdict_exit(v.verdict, accept_reduced));
+            }
             let (chain, snapshot) = chain(report, streams)?;
             // Without --against, compare with the backup's own snapshot if it was kept.
             let reference = against.or(snapshot.filter(|p| p.exists()));
@@ -262,6 +342,60 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             )?;
             print_verification(&v);
             Ok(verdict_exit(v.verdict, accept_reduced))
+        }
+        Command::RestoreLayout {
+            report,
+            disk,
+            btrfs_dev,
+        } => {
+            let v = partshield_core::report::load_report_value(&report)?;
+            let mut layout: DiskLayout = serde_json::from_value(v["layout"].clone())
+                .ok()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{} no tiene disposición del disco (copia hecha sin --layout)",
+                        report.display()
+                    )
+                })?;
+            let dir = report.parent().unwrap_or(Path::new("."));
+            for r in [
+                &mut layout.partition_table,
+                &mut layout.partition_table_dump,
+                &mut layout.esp,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !r.path.exists() {
+                    if let Some(f) = r.path.file_name() {
+                        r.path = dir.join(f);
+                    }
+                }
+            }
+            let done = layout::restore_layout(
+                s,
+                &layout::LayoutRestoreOptions {
+                    layout: &layout,
+                    target_disk: &disk,
+                    btrfs_device: btrfs_dev.as_deref(),
+                },
+            )?;
+            println!(
+                "\nTabla de particiones: {}. ESP: {}. UUID: {}",
+                if done.partition_table {
+                    "restaurada"
+                } else {
+                    "no"
+                },
+                done.esp.map_or("no".into(), |(off, len)| format!(
+                    "{len} bytes en el byte {off}"
+                )),
+                done.fs_uuid.as_deref().unwrap_or("sin cambiar")
+            );
+            for n in &done.notes {
+                println!("  - {n}");
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::VerifyReport { report, public_key } => {
             let path = Path::new(&public_key);
@@ -293,6 +427,18 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                 println!("\nRestaurada bit a bit en {} ({d})", to.display());
                 return Ok(ExitCode::SUCCESS);
             }
+            if let Some(items) = report.as_deref().and_then(|p| multi_items(p).transpose()) {
+                if writable.is_some() {
+                    bail!("en una copia de varios subvolúmenes cada uno se restaura con su etiqueta; sobra --as");
+                }
+                for (label, r) in restore_many(s, &items?, &to)? {
+                    println!(
+                        "Restaurado {label}: {}",
+                        r.writable.as_ref().unwrap_or(&r.received).display()
+                    );
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
             let (chain, _) = chain(report, streams)?;
             let r = restore(
                 s,
@@ -309,6 +455,24 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// Subvolúmenes de un informe de varios; `None` si el informe es de uno solo.
+fn multi_items(report: &Path) -> Result<Option<Vec<SubvolArtifact>>> {
+    let v = partshield_core::report::load_report_value(report)?;
+    if v["subvolumes"].as_array().map_or(true, |a| a.is_empty()) {
+        return Ok(None);
+    }
+    let mut items: Vec<SubvolArtifact> = serde_json::from_value(v["subvolumes"].clone())?;
+    let dir = report.parent().unwrap_or(Path::new("."));
+    for link in items.iter_mut().flat_map(|i| i.chain.iter_mut()) {
+        if !link.path.exists() {
+            if let Some(f) = link.path.file_name() {
+                link.path = dir.join(f);
+            }
+        }
+    }
+    Ok(Some(items))
 }
 
 /// The streams to work on, from a report (plus its snapshot) or given in

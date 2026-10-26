@@ -160,10 +160,12 @@ pub(crate) mod sample {
             layout: Some(DiskLayout {
                 fs_uuid: Some("0f1e2d3c".into()),
                 partition_table: Some(StreamRef::plain("/copias/gpt.bin".into())),
+                partition_table_dump: None,
                 esp: None,
                 notes: vec!["sin ESP".into()],
             }),
             raw: None,
+            subvolumes: vec![],
             parent_report: Some("/copias/home-1.report.json".into()),
             chain: vec![
                 StreamRef {

@@ -26,6 +26,7 @@
     "artifact": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/artifact" }] },
     "layout": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/layout" }] },
     "raw": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/raw_image" }] },
+    "subvolumes": { "type": "array", "items": { "$ref": "#/$defs/subvol_artifact" } },
     "parent_report": { "type": ["string", "null"] },
     "chain": { "type": "array", "items": { "$ref": "#/$defs/stream_ref" } },
     "verification": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] },
@@ -191,6 +192,18 @@
         "layers": { "type": "array", "items": { "$ref": "#/$defs/block_layer" } }
       }
     },
+    "subvol_artifact": {
+      "type": "object",
+      "required": ["label", "source", "artifact", "parent", "chain"],
+      "additionalProperties": false,
+      "properties": {
+        "label": { "type": "string" },
+        "source": { "type": "string" },
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "parent": { "type": ["string", "null"] },
+        "chain": { "type": "array", "items": { "$ref": "#/$defs/stream_ref" } }
+      }
+    },
     "raw_image": {
       "type": "object",
       "required": ["device", "size_bytes", "content_digest"],
@@ -208,6 +221,7 @@
       "properties": {
         "fs_uuid": { "type": ["string", "null"] },
         "partition_table": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/stream_ref" }] },
+        "partition_table_dump": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/stream_ref" }] },
         "esp": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/stream_ref" }] },
         "notes": { "type": "array", "items": { "type": "string" } }
       }

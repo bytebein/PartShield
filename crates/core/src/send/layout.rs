@@ -301,6 +301,10 @@ fn capture_into(s: &mut Session, opts: &CaptureOptions, files: &LayoutFiles) -> 
     let dump = s.run(Cmd::new("sfdisk").arg("--dump").arg(&disk))?;
     std::fs::write(&files.dump, &dump)
         .with_context(|| format!("escribiendo {}", files.dump.display()))?;
+    layout.partition_table_dump = Some(StreamRef {
+        digest: Some(Digest::of_file(opts.hash, &files.dump)?),
+        ..StreamRef::plain(files.dump.clone())
+    });
     layout.notes.push(format!(
         "tabla de {} ({}, {} particiones); volcado legible en {} ({})",
         disk.display(),
