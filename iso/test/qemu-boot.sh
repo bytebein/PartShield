@@ -41,9 +41,12 @@ boot() { # boot MODO
         sleep 5
     done
     if [ "$mode" = gui ] && grep -qa "$want" "$log"; then
-        # La ventana tarda un poco en pintarse después del aviso.
-        sleep 20
-        echo "screendump /logs/gui.ppm" | socat - UNIX-CONNECT:/tmp/mon-$mode.sock >/dev/null
+        # Sin KVM la primera ventana tarda en pintarse: varias capturas.
+        for t in ${GUI_SHOTS:-20 60 120 180}; do
+            sleep $((t - ${prev:-0})); prev=$t
+            echo "screendump /logs/gui-${t}s.ppm" | socat - UNIX-CONNECT:/tmp/mon-$mode.sock >/dev/null
+        done
+        cp /logs/gui-${t}s.ppm /logs/gui.ppm
         sleep 2
     fi
     kill $pid 2>/dev/null; wait $pid 2>/dev/null
