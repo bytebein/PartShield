@@ -17,7 +17,7 @@ log "Dependencias de compilación"
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     ca-certificates curl build-essential autoconf automake libtool pkg-config \
-    gettext autopoint dpkg-dev \
+    gettext autopoint dpkg-dev xsltproc docbook-xsl docbook-xml \
     uuid-dev libblkid-dev zlib1g-dev libzstd-dev liblzo2-dev libudev-dev libxxhash-dev libssl-dev \
     libext2fs-dev libcom-err2 \
     cargo rustc >/dev/null
