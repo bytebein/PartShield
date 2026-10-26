@@ -1,6 +1,8 @@
 [Unit]
 Description=PartShield: anunciar arranque completo
-After=multi-user.target
+# Sin After=multi-user.target: multi-user.target ya espera a esta unidad
+# (WantedBy) y ordenarla detrás crearía un ciclo.
+After=systemd-user-sessions.service
 
 [Service]
 Type=oneshot
