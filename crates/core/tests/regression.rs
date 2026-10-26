@@ -188,9 +188,6 @@ fn caso_subvolumenes_montados() {
 /// Lo mismo con `@home/.snapshots` (snapper) anidado dentro de `@home` y un
 /// snapshot dentro de `.snapshots`.
 #[test]
-#[ignore = "bug: verify (compare_trees) ve el hueco del subvolumen anidado .snapshots en el \
-            snapshot pero send no lo manda: 'falta en la copia: .snapshots' y toda copia de \
-            @home con snapper sale Invalid"]
 fn caso_subvolumenes_anidados() {
     skip_unless_e2e!();
     subvolumes("anidados", true);
@@ -241,6 +238,14 @@ fn subvolumes(name: &str, nested: bool) {
         )
         .unwrap();
         assert_backup_valid(&report);
+        // El hueco de .snapshots no invalida la copia de @home, pero se avisa.
+        if nested && *name == "@home" {
+            assert!(
+                report.warnings.iter().any(|w| w.contains(".snapshots")),
+                "{:?}",
+                report.warnings
+            );
+        }
         let dev = report
             .device
             .as_ref()
@@ -391,7 +396,7 @@ fn caso_disperso_grande() {
 /// calcula con `bytes_used` (lib.rs) y la imagen temporal se monta sin
 /// compresión (verify), así que `btrfs receive` se queda sin espacio.
 #[test]
-#[ignore = "bug: scratch_size sale de bytes_used (lib.rs) y la imagen temporal de verify se monta sin compresión: 1.5 GiB compresibles -> btrfs receive ENOSPC y la copia sale Invalid"]
+
 fn bug_compresible_grande_desborda_scratch() {
     skip_unless_e2e!();
     round_trip(
@@ -421,7 +426,7 @@ fn verify_against(reference: &Path, chain: &[StreamRef], scratch: &Path) -> Verd
 
 /// `verify` no compara xattrs: una referencia sin el xattr pasa igual.
 #[test]
-#[ignore = "bug: verify::compare no compara xattrs; una referencia sin user.comentario da Valid"]
+
 fn bug_verify_no_compara_xattrs() {
     skip_unless_e2e!();
     let rt = round_trip("verify-xattrs", Options::default(), |d, _| {
@@ -447,7 +452,7 @@ fn bug_verify_no_compara_xattrs() {
 
 /// `verify` no compara hardlinks: dos copias independientes pasan igual.
 #[test]
-#[ignore = "bug: verify::compare no compara hardlinks; romper un hardlink en la referencia da Valid"]
+
 fn bug_verify_no_compara_hardlinks() {
     skip_unless_e2e!();
     let rt = round_trip("verify-hardlinks", Options::default(), |d, _| {
@@ -471,7 +476,7 @@ fn bug_verify_no_compara_hardlinks() {
 /// temporal: la imagen se llama `partshield-verify-<pid>.img`, así que
 /// las dos usan el mismo archivo.
 #[test]
-#[ignore = "bug: verify nombra la imagen temporal partshield-verify-<pid>.img; dos verificaciones del mismo proceso en el mismo scratch_dir chocan y una sale Invalid"]
+
 fn bug_verify_en_paralelo_mismo_scratch() {
     skip_unless_e2e!();
     let rt = round_trip("verify-paralelo", Options::default(), |d, _| {

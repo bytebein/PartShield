@@ -156,7 +156,12 @@ fn run_backup(
 
     let device = send::backing_device(s, opts.source)?;
     let sb = inspect_device(s, &device, report)?;
-    let scratch_size = sb.bytes_used.saturating_mul(2).max(1 << 30);
+    // La imagen temporal es dispersa: su tamaño aparente no ocupa disco.
+    // Se usa el del origen (bytes_used es el tamaño ya comprimido).
+    let scratch_size = sb
+        .total_bytes
+        .max(sb.bytes_used.saturating_mul(2))
+        .max(1 << 30);
     report.device = Some(device.clone());
     report.superblock = Some(sb);
 
@@ -206,7 +211,9 @@ fn run_backup(
     if !opts.keep_snapshot {
         send::delete_subvolume(s, &artifact.snapshot)?;
     }
-    report.verification = Some(verification?);
+    let verification = verification?;
+    warn_nested(report, &verification);
+    report.verification = Some(verification);
     Ok(())
 }
 
@@ -246,7 +253,9 @@ fn run_multi(
             send::delete_subvolume(s, &it.artifact.snapshot)?;
         }
     }
-    report.verification = Some(verification?);
+    let verification = verification?;
+    warn_nested(report, &verification);
+    report.verification = Some(verification);
     Ok(())
 }
 
@@ -339,11 +348,39 @@ pub fn verify_subvolumes(
             }
         })
         .collect();
+    // Recuentos sumados; diferencias y subvolúmenes anidados con su etiqueta.
+    let mut comparison = types::Comparison::default();
+    for (label, v) in &each {
+        if let Some(c) = &v.comparison {
+            comparison.entries += c.entries;
+            comparison.files += c.files;
+            comparison.bytes += c.bytes;
+            comparison.total_differences += c.total_differences;
+            comparison
+                .differences
+                .extend(c.differences.iter().map(|d| format!("{label}: {d}")));
+            comparison
+                .nested_subvolumes
+                .extend(c.nested_subvolumes.iter().map(|n| format!("{label}/{n}")));
+        }
+    }
     Ok(types::Verification {
         verdict: verify::verdict_of(&steps),
         steps,
-        comparison: None,
+        comparison: Some(comparison),
     })
+}
+
+/// Avisa de los subvolúmenes anidados que la copia no incluye.
+fn warn_nested(report: &mut Report, v: &types::Verification) {
+    if let Some(c) = &v.comparison {
+        if !c.nested_subvolumes.is_empty() {
+            report.warnings.push(format!(
+                "subvolúmenes anidados no incluidos en esta copia: {}; cópialos con su propio --subvol si los necesitas",
+                c.nested_subvolumes.join(", ")
+            ));
+        }
+    }
 }
 
 pub struct RawOptions<'a> {

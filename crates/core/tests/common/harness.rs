@@ -71,6 +71,10 @@ pub fn backup_opts<'a>(
         zstd_level: 3,
         parent_report: parent,
         hash: HashAlgo::Blake3,
+        sign_key: None,
+        subvolumes: &[],
+        capture_layout: false,
+        disk: None,
     }
 }
 

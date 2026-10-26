@@ -196,6 +196,7 @@ pub(crate) mod sample {
                     bytes: 100,
                     differences: vec![],
                     total_differences: 0,
+                    nested_subvolumes: vec![],
                 }),
             }),
             commands: vec![CommandRecord {

@@ -494,10 +494,14 @@ impl Scratch {
     }
 
     fn mount(&mut self, s: &mut Session, read_only: bool) -> Result<()> {
-        let mut cmd = Cmd::new("mount");
-        if read_only {
-            cmd = cmd.arg("-o").arg("ro");
-        }
+        // Con compresión: si no, unos datos muy compresibles en el origen
+        // pueden no caber restaurados (bug_compresible_grande_desborda_scratch).
+        let opts = if read_only {
+            "ro,compress=zstd"
+        } else {
+            "compress=zstd"
+        };
+        let cmd = Cmd::new("mount").arg("-o").arg(opts);
         s.run(cmd.arg(self.dev()).arg(self.mountpoint.path()))?;
         self.mounted = true;
         Ok(())

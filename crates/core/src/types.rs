@@ -401,6 +401,11 @@ pub struct Comparison {
     /// First differences found (capped at `MAX_DIFFS`).
     pub differences: Vec<String>,
     pub total_differences: usize,
+    /// Subvolúmenes anidados en la referencia (p. ej. `.snapshots` de
+    /// snapper). `btrfs send` no los incluye: se copian con su propio
+    /// `--subvol`. No cuentan como diferencia, pero se avisa.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested_subvolumes: Vec<String>,
 }
 
 impl Comparison {

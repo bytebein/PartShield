@@ -70,9 +70,12 @@ pub fn absorb(into: &mut Comparison, other: &Comparison) {
 }
 
 pub fn compare_metadata(expected: &Path, actual: &Path) -> Result<MetadataComparison> {
-    let a = scan(expected)?;
+    let (a, nested) = scan_with_nested(expected)?;
     let b = scan(actual)?;
-    let mut cmp = Comparison::default();
+    let mut cmp = Comparison {
+        nested_subvolumes: nested.iter().map(|p| p.display().to_string()).collect(),
+        ..Comparison::default()
+    };
     let mut files = Vec::new();
 
     for (path, ea) in &a {
@@ -178,14 +181,32 @@ fn describe(path: &Path, a: &Entry, b: &Entry) -> String {
     }
 }
 
+/// `BTRFS_EMPTY_SUBVOL_DIR_OBJECTID`: en un snapshot, cada subvolumen
+/// anidado aparece como un directorio vacío con este número de inodo.
+const EMPTY_SUBVOL_DIR_INO: u64 = 2;
+
 fn scan(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    Ok(scan_with_nested(root)?.0)
+}
+
+/// Como `scan`, pero aparta los huecos de subvolúmenes anidados.
+fn scan_with_nested(root: &Path) -> Result<(BTreeMap<PathBuf, Entry>, Vec<PathBuf>)> {
     let mut out = BTreeMap::new();
+    let mut nested = Vec::new();
     for item in WalkDir::new(root).follow_links(false) {
         let item = item.with_context(|| format!("recorriendo {}", root.display()))?;
         let path = item.path();
         let md = path
             .symlink_metadata()
             .with_context(|| format!("leyendo los metadatos de {}", path.display()))?;
+        if item.depth() > 0
+            && md.is_dir()
+            && md.ino() == EMPTY_SUBVOL_DIR_INO
+            && std::fs::read_dir(path).is_ok_and(|mut d| d.next().is_none())
+        {
+            nested.push(path.strip_prefix(root).expect("child").to_path_buf());
+            continue;
+        }
         let ft = md.file_type();
         let kind = if ft.is_symlink() {
             Kind::Symlink(std::fs::read_link(path)?)
@@ -216,7 +237,7 @@ fn scan(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
             },
         );
     }
-    Ok(out)
+    Ok((out, nested))
 }
 
 fn hash_file(path: &Path) -> Result<[u8; 32]> {
