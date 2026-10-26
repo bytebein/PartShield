@@ -314,7 +314,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
     <h2>Live USB de PartShield</h2>
     <p class="lead">Debian 13 "trixie" con el kernel firmado de Debian: arranca con Secure Boot activado, en UEFI y en BIOS. Arranca directamente en la interfaz de PartShield; incluye también la consola y herramientas de recuperación.</p>
     <div class="download">
-      <h3>partshield-0.1.0-20261026-gui-amd64.iso</h3>
+      <h3>partshield-0.1.0-20261026-2-amd64.iso</h3>
       <div class="meta">
         <span>910 MB · amd64</span>
         <span>con interfaz gráfica</span>
@@ -323,13 +323,13 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
         <span>kernel 6.12 (Debian)</span>
       </div>
       <div class="buttons">
-        <a class="btn primary" href="/descargas/partshield-0.1.0-20261026-gui-amd64.iso">Descargar ISO</a>
-        <a class="btn" href="/descargas/partshield-0.1.0-20261026-gui-amd64.iso.sha256">SHA-256</a>
+        <a class="btn primary" href="/descargas/partshield-0.1.0-20261026-2-amd64.iso">Descargar ISO</a>
+        <a class="btn" href="/descargas/partshield-0.1.0-20261026-2-amd64.iso.sha256">SHA-256</a>
         <a class="btn" href="/descargas/">Todas las versiones</a>
       </div>
-      <p class="hash">SHA-256: ad99dc77fb87a5544dfa85260248b1b379844ce39c2c92460c994d52884969af</p>
-      <pre><code>sha256sum -c partshield-0.1.0-20261026-gui-amd64.iso.sha256
-sudo dd if=partshield-0.1.0-20261026-gui-amd64.iso of=/dev/sdX bs=4M status=progress conv=fsync</code></pre>
+      <p class="hash">SHA-256: f60f2d898a42ff6b056f59a28ded74cd45f0fbb6a5378e9bca675911489b73aa</p>
+      <pre><code>sha256sum -c partshield-0.1.0-20261026-2-amd64.iso.sha256
+sudo dd if=partshield-0.1.0-20261026-2-amd64.iso of=/dev/sdX bs=4M status=progress conv=fsync</code></pre>
       <div class="warnbox"><strong>Versión de prueba.</strong> Úsala para probar, no como única copia de datos importantes. <code>dd</code> borra el pendrive de destino: comprueba antes con <code>lsblk</code> que <code>sdX</code> es el pendrive. Todavía no hay interfaz gráfica: se usa desde la consola.</div>
       <p style="margin-top:18px;color:var(--muted);font-size:.95rem">También incluye: ddrescue, testdisk y photorec, smartctl, nvme-cli, sgdisk, cryptsetup, LVM y firmware para wifi y gráficos.</p>
     </div>
