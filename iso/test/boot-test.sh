@@ -17,7 +17,7 @@ set -euo pipefail
 ISO=$(readlink -f "$1"); shift
 [ -f "$ISO" ] || { echo "no existe la ISO $ISO" >&2; exit 2; }
 MODES=("$@")
-[ ${#MODES[@]} -gt 0 ] || MODES=(bios uefi secureboot selftest)
+[ ${#MODES[@]} -gt 0 ] || MODES=(bios uefi secureboot selftest gui)
 HERE=$(cd "$(dirname "$0")" && pwd)
 LOGS="$(dirname "$ISO")/boot-logs"
 mkdir -p "$LOGS"

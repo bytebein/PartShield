@@ -1,0 +1,34 @@
+[Unit]
+Description=PartShield: interfaz gráfica (cage en tty7)
+# Se puede desactivar con partshield.nogui en la línea del kernel; las
+# pruebas automáticas (selftest) tampoco la necesitan.
+ConditionKernelCommandLine=!partshield.nogui
+After=partshield-ready.service systemd-user-sessions.service systemd-logind.service
+Conflicts=getty@tty7.service
+Before=getty.target
+
+[Service]
+# Como root: la interfaz lee discos. PAMName crea una sesión de logind
+# para que cage pueda abrir la pantalla y el teclado.
+User=root
+PAMName=login
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal+console
+StandardError=journal
+UtmpIdentifier=tty7
+UtmpMode=user
+Environment=XDG_SESSION_TYPE=wayland
+Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
+Environment=XKB_DEFAULT_LAYOUT=es
+ExecStartPre=-/usr/bin/chvt 7
+ExecStart=/usr/bin/cage -s -- /usr/bin/partshield-gui
+# Al salir (botón «Salir a la consola» o fallo) se vuelve a la consola.
+ExecStopPost=-/usr/bin/chvt 1
+Restart=no
+
+[Install]
+WantedBy=graphical.target multi-user.target

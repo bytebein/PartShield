@@ -36,6 +36,21 @@ cryptsetup
 lvm2
 mdadm
 
+# Interfaz: partshield-gui a pantalla completa en cage (Wayland, sin escritorio)
+partshield-gui
+cage
+libgtk-4-1
+libadwaita-1-0
+libgl1-mesa-dri
+libegl-mesa0
+libgles2
+fonts-cantarell
+fonts-dejavu-core
+adwaita-icon-theme
+hicolor-icon-theme
+xkb-data
+dbus-user-session
+
 # Recuperación y diagnóstico
 gddrescue
 testdisk

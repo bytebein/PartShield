@@ -20,6 +20,7 @@ apt-get install -y -qq --no-install-recommends \
     gettext autopoint dpkg-dev xsltproc docbook-xsl docbook-xml \
     uuid-dev libblkid-dev zlib1g-dev libzstd-dev liblzo2-dev libudev-dev libxxhash-dev libssl-dev \
     libext2fs-dev libcom-err2 \
+    libgtk-4-dev libadwaita-1-dev \
     cargo rustc >/dev/null
 
 # mkdeb NOMBRE VERSIÓN DIRECTORIO DESCRIPCIÓN
@@ -96,13 +97,19 @@ PS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' /src/Cargo.toml | head -1)
 log "partshield $PS_VERSION (rustc $(rustc --version | cut -d' ' -f2))"
 rm -rf "$WORK/partshield-src" && cp -a /src "$WORK/partshield-src" && rm -rf "$WORK/partshield-src/target"
 cd "$WORK/partshield-src"
-cargo build --release --locked -p partshield -q
+cargo build --release --locked -p partshield -p partshield-gui -q
 rm -rf "$WORK/root-partshield"
 install -Dm755 target/release/partshield "$WORK/root-partshield/usr/bin/partshield"
 install -Dm644 README.md "$WORK/root-partshield/usr/share/doc/partshield/README.md"
 mkdeb partshield "$PS_VERSION-$DEB_REVISION" "$WORK/root-partshield" \
     "Copias de Btrfs que no se dan por buenas hasta restaurarlas" \
     "btrfs-progs (>= $BTRFS_PROGS_VERSION-$DEB_REVISION), partclone (>= $PARTCLONE_VERSION), util-linux, gdisk, fdisk, dosfstools, mtools, cryptsetup-bin, lvm2"
+
+rm -rf "$WORK/root-gui"
+install -Dm755 target/release/partshield-gui "$WORK/root-gui/usr/bin/partshield-gui"
+mkdeb partshield-gui "$PS_VERSION-$DEB_REVISION" "$WORK/root-gui" \
+    "Interfaz gráfica de PartShield (GTK 4 + libadwaita)" \
+    "partshield (= $PS_VERSION-$DEB_REVISION)"
 
 log "Paquetes listos"
 ls -la "$OUT"
