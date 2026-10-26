@@ -163,6 +163,7 @@ pub(crate) mod sample {
                 esp: None,
                 notes: vec!["sin ESP".into()],
             }),
+            raw: None,
             parent_report: Some("/copias/home-1.report.json".into()),
             chain: vec![
                 StreamRef {

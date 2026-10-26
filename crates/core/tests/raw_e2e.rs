@@ -8,6 +8,7 @@ use std::process::Command;
 
 use partshield_core::cmd::Session;
 use partshield_core::raw::{self, load_from_report};
+use partshield_core::report::sign;
 use partshield_core::types::{HashAlgo, StepStatus, Verdict, Verification};
 use partshield_core::verify::compare::compare_trees;
 use partshield_core::{backup_raw, RawOptions};
@@ -92,12 +93,14 @@ fn raw_image_backup_verify_restore() {
     sh("sync", &[]);
 
     let dest = tmp.path().join("copias");
+    let key = tmp.path().join("clave");
     let opts = RawOptions {
         device: Path::new(&origin.dev),
         dest_dir: &dest,
         scratch_dir: Some(tmp.path()),
         zstd_level: 3,
         hash: HashAlgo::Blake3,
+        sign_key: Some(&key),
     };
 
     // 1. Montado en lectura-escritura: se niega y no deja stream.
@@ -140,6 +143,21 @@ fn raw_image_backup_verify_restore() {
         report.superblock.is_some(),
         "debe registrar el Btrfs detectado"
     );
+    // Informe firmado y en HTML junto al JSON.
+    assert!(report.signature.is_some());
+    let pk = sign::load_public_key(&key.with_extension("pub")).unwrap();
+    let json = fs::read_to_string(&report_path).unwrap();
+    sign::verify_signature(&json, &pk).unwrap();
+    assert!(json.contains("\"size_bytes\": 536870912"));
+    assert!(sign::verify_signature(&json.replace("\"raw\"", "\"raw\" "), &pk).is_ok());
+    assert!(json.contains("\"size_bytes\": 536870912"));
+    assert!(sign::verify_signature(
+        &json.replacen("\"size_bytes\": 536870912", "\"size_bytes\": 536870913", 1),
+        &pk
+    )
+    .is_err());
+    let html = fs::read_to_string(report_path.with_extension("html")).unwrap();
+    assert!(html.contains("VÁLIDA"));
     let image = report.raw.clone().unwrap();
     assert_eq!(image.size_bytes, 512 << 20);
     let artifact = report.artifact.as_ref().unwrap();

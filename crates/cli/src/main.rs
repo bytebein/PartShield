@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use partshield_core::cmd::Session;
 use partshield_core::detect::{modes, SuperblockExt};
 use partshield_core::raw;
-use partshield_core::report::load_prior;
+use partshield_core::report::{load_prior, sign};
 use partshield_core::send::restore::{restore, RestoreOptions};
 use partshield_core::types::{
     ChecksumStatus, HashAlgo, StepStatus, StreamRef, Superblock, Verdict, Verification,
@@ -63,6 +63,17 @@ enum Command {
         /// Algoritmo de hash de los streams.
         #[arg(long, value_enum, default_value = "blake3")]
         hash: HashArg,
+        /// Firmar el informe con esta clave ed25519 (se crea con permisos
+        /// 0600 si no existe; la pública queda en <ruta>.pub).
+        #[arg(long)]
+        sign_key: Option<PathBuf>,
+    },
+    /// Comprueba la firma ed25519 de un informe.
+    VerifyReport {
+        report: PathBuf,
+        /// Clave pública: archivo .pub o la clave en hex.
+        #[arg(long)]
+        public_key: String,
     },
     /// Verifica una copia restaurándola en un Btrfs temporal.
     Verify {
@@ -164,6 +175,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             parent,
             zstd_level,
             hash,
+            sign_key,
         } => {
             if matches!(mode, ModeArg::Raw)
                 && (parent.is_some() || keep_snapshot || snapshot_dir.is_some())
@@ -179,6 +191,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                         scratch_dir: scratch_dir.as_deref(),
                         zstd_level,
                         hash: hash.into(),
+                        sign_key: sign_key.as_deref(),
                     },
                 )?,
                 ModeArg::Send => backup(
@@ -192,6 +205,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                         zstd_level,
                         parent_report: parent.as_deref(),
                         hash: hash.into(),
+                        sign_key: sign_key.as_deref(),
                     },
                 )?,
             };
@@ -210,6 +224,10 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                 println!("\nError: {e}");
             }
             println!("Informe: {}", path.display());
+            println!("Informe HTML: {}", path.with_extension("html").display());
+            if report.signature.is_some() {
+                println!("Firmado con ed25519");
+            }
             Ok(verdict_exit(report.verdict(), false))
         }
         Command::Verify {
@@ -244,6 +262,17 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             )?;
             print_verification(&v);
             Ok(verdict_exit(v.verdict, accept_reduced))
+        }
+        Command::VerifyReport { report, public_key } => {
+            let path = Path::new(&public_key);
+            let pk = if path.exists() {
+                sign::load_public_key(path)?
+            } else {
+                sign::parse_public_key(&public_key)?
+            };
+            partshield_core::report::verify_signature(&std::fs::read_to_string(&report)?, &pk)?;
+            println!("Firma correcta: {}", report.display());
+            Ok(ExitCode::SUCCESS)
         }
         Command::Restore {
             streams,

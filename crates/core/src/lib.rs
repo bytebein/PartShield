@@ -43,6 +43,8 @@ pub struct BackupOptions<'a> {
     /// this backup incremental to it.
     pub parent_report: Option<&'a Path>,
     pub hash: HashAlgo,
+    /// Clave ed25519 con la que firmar el informe (se crea si no existe).
+    pub sign_key: Option<&'a Path>,
 }
 
 /// Installed partclone.btrfs version, if any.
@@ -107,7 +109,7 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
     }
     report.finished = Local::now();
     report.commands = std::mem::take(&mut s.records);
-    report.write_json(&report_path)?;
+    write_report(&mut report, &report_path, opts.sign_key)?;
     Ok((report, report_path))
 }
 
@@ -186,6 +188,7 @@ pub struct RawOptions<'a> {
     pub scratch_dir: Option<&'a Path>,
     pub zstd_level: i32,
     pub hash: HashAlgo,
+    pub sign_key: Option<&'a Path>,
 }
 
 /// Imagen sector a sector → verificación, siempre con informe.
@@ -257,8 +260,22 @@ pub fn backup_raw(s: &mut Session, opts: &RawOptions) -> Result<(Report, PathBuf
     }
     report.finished = Local::now();
     report.commands = std::mem::take(&mut s.records);
-    report.write_json(&report_path)?;
+    write_report(&mut report, &report_path, opts.sign_key)?;
     Ok((report, report_path))
+}
+
+/// Firma (si hay clave) y escribe `X.report.json` y `X.report.html`.
+///
+/// Si la firma falla, el informe se escribe igualmente sin firmar (es el
+/// único registro de una copia ya hecha) y después se devuelve el error.
+fn write_report(report: &mut Report, path: &Path, sign_key: Option<&Path>) -> Result<()> {
+    let signed = match sign_key {
+        None => Ok(()),
+        Some(k) => report::load_or_create_key(k).and_then(|key| report::sign(report, &key)),
+    };
+    report.write_json(path)?;
+    report::write_html(report, &path.with_extension("html"))?;
+    signed.map_err(|e| e.context("la copia está hecha, pero el informe ha quedado sin firmar"))
 }
 
 /// First of `stem`, `stem-1`, `stem-2`… that no earlier backup used, so a
@@ -272,6 +289,7 @@ fn unique_name(stem: &str, dest_dir: &Path, snapshot_dir: &Path) -> String {
         .find(|n| {
             let taken = [
                 dest_dir.join(format!("{n}.report.json")),
+                dest_dir.join(format!("{n}.report.html")),
                 dest_dir.join(format!("{n}.btrfs.zst")),
                 dest_dir.join(format!("{n}.raw.zst")),
                 snapshot_dir.join(format!(".partshield-{n}")),

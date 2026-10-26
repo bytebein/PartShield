@@ -7,7 +7,7 @@
   "required": [
     "schema_version", "tool", "version", "started", "finished", "source", "device",
     "block_stack", "superblock", "modes", "mode", "hash_algo", "artifact", "layout",
-    "parent_report", "chain", "verification", "commands", "error", "signature"
+    "raw", "parent_report", "chain", "verification", "commands", "error", "signature"
   ],
   "additionalProperties": false,
   "properties": {
@@ -25,6 +25,7 @@
     "hash_algo": { "$ref": "#/$defs/hash_algo" },
     "artifact": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/artifact" }] },
     "layout": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/layout" }] },
+    "raw": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/raw_image" }] },
     "parent_report": { "type": ["string", "null"] },
     "chain": { "type": "array", "items": { "$ref": "#/$defs/stream_ref" } },
     "verification": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] },
@@ -187,6 +188,16 @@
       "additionalProperties": false,
       "properties": {
         "layers": { "type": "array", "items": { "$ref": "#/$defs/block_layer" } }
+      }
+    },
+    "raw_image": {
+      "type": "object",
+      "required": ["device", "size_bytes", "content_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "device": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "content_digest": { "$ref": "#/$defs/digest" }
       }
     },
     "layout": {
