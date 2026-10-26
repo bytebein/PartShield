@@ -4,34 +4,13 @@
 //! feature. Anything not on the tested list disables that mode instead of
 //! producing a backup that may silently miss metadata (partclone #303).
 
-use serde::Serialize;
-
-use crate::features::{CompatRo, Features, Incompat};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    /// `btrfs send` per subvolume. Works at file level, so it is valid for
-    /// any feature the running kernel can mount.
-    Send,
-    /// Used-blocks image with partclone.btrfs.
-    Partclone,
-    /// Every sector, compressed.
-    Raw,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Assessment {
-    pub mode: Mode,
-    pub allowed: bool,
-    pub reasons: Vec<String>,
-}
+use crate::types::{Assessment, CompatRo, FeatureSet, Incompat, Mode, Version};
 
 /// partclone version with the BLOCK_GROUP_TREE fix (0.3.49) plus the
 /// multi-level tree fix (0.3.50).
 pub const PARTCLONE_MIN: Version = Version(0, 3, 50);
 
-/// Features partclone handles from `PARTCLONE_MIN` on, as covered by its
+/// FeatureSet partclone handles from `PARTCLONE_MIN` on, as covered by its
 /// regression tests and ours.
 const PARTCLONE_COMPAT_RO: u64 =
     CompatRo::FREE_SPACE_TREE | CompatRo::FREE_SPACE_TREE_VALID | CompatRo::BLOCK_GROUP_TREE;
@@ -46,32 +25,7 @@ const PARTCLONE_INCOMPAT: u64 = Incompat::MIXED_BACKREF
 
 type FlagName = fn(u64) -> &'static str;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct Version(pub u32, pub u32, pub u32);
-
-impl Version {
-    /// Finds the first `x.y.z` in a string such as
-    /// `Partclone v0.3.50 http://partclone.org`.
-    pub fn find_in(s: &str) -> Option<Self> {
-        s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
-            .filter_map(|tok| {
-                let mut it = tok.split('.').map(|p| p.parse::<u32>());
-                match (it.next(), it.next(), it.next()) {
-                    (Some(Ok(a)), Some(Ok(b)), Some(Ok(c))) => Some(Version(a, b, c)),
-                    _ => None,
-                }
-            })
-            .next()
-    }
-}
-
-impl std::fmt::Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.0, self.1, self.2)
-    }
-}
-
-pub fn assess(features: &Features, partclone: Option<Version>) -> Vec<Assessment> {
+pub fn assess(features: &FeatureSet, partclone: Option<Version>) -> Vec<Assessment> {
     vec![
         Assessment {
             mode: Mode::Send,
@@ -87,7 +41,7 @@ pub fn assess(features: &Features, partclone: Option<Version>) -> Vec<Assessment
     ]
 }
 
-fn assess_partclone(features: &Features, version: Option<Version>) -> Assessment {
+fn assess_partclone(features: &FeatureSet, version: Option<Version>) -> Assessment {
     let mut reasons = Vec::new();
     match version {
         None => reasons.push("partclone.btrfs no está instalado".to_string()),
@@ -125,8 +79,8 @@ fn assess_partclone(features: &Features, version: Option<Version>) -> Assessment
 mod tests {
     use super::*;
 
-    fn feats(compat_ro: u64, incompat: u64) -> Features {
-        Features {
+    fn feats(compat_ro: u64, incompat: u64) -> FeatureSet {
+        FeatureSet {
             compat: 0,
             compat_ro: CompatRo(compat_ro),
             incompat: Incompat(incompat),

@@ -7,8 +7,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Serialize;
 use walkdir::WalkDir;
+
+use crate::types::Comparison;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Kind {
@@ -24,22 +25,6 @@ struct Entry {
     mode: u32,
     uid: u32,
     gid: u32,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Comparison {
-    pub entries: usize,
-    pub files: usize,
-    pub bytes: u64,
-    /// First differences found (capped at `MAX_DIFFS`).
-    pub differences: Vec<String>,
-    pub total_differences: usize,
-}
-
-impl Comparison {
-    pub fn identical(&self) -> bool {
-        self.total_differences == 0
-    }
 }
 
 const MAX_DIFFS: usize = 50;

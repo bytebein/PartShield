@@ -4,12 +4,13 @@ use std::process::ExitCode;
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use partshield_core::cmd::Session;
-use partshield_core::modes;
+use partshield_core::detect::{modes, SuperblockExt};
 use partshield_core::report::load_prior;
-use partshield_core::restore::{restore, RestoreOptions};
-use partshield_core::send::StreamRef;
-use partshield_core::superblock::{ChecksumStatus, Superblock};
-use partshield_core::verify::{self, StepStatus, Verdict, Verification, VerifyOptions};
+use partshield_core::send::restore::{restore, RestoreOptions};
+use partshield_core::types::{
+    ChecksumStatus, HashAlgo, StepStatus, StreamRef, Superblock, Verdict, Verification,
+};
+use partshield_core::verify::{self, VerifyOptions};
 use partshield_core::{backup, partclone_version, BackupOptions};
 
 /// Copias de Btrfs que no se dan por buenas hasta restaurarlas.
@@ -53,6 +54,9 @@ enum Command {
         parent: Option<PathBuf>,
         #[arg(long, default_value_t = 3)]
         zstd_level: i32,
+        /// Algoritmo de hash de los streams.
+        #[arg(long, value_enum, default_value = "blake3")]
+        hash: HashArg,
     },
     /// Verifica una copia restaurándola en un Btrfs temporal.
     Verify {
@@ -87,6 +91,21 @@ enum Command {
         #[arg(long = "as")]
         writable: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum HashArg {
+    Blake3,
+    Sha256,
+}
+
+impl From<HashArg> for HashAlgo {
+    fn from(h: HashArg) -> Self {
+        match h {
+            HashArg::Blake3 => HashAlgo::Blake3,
+            HashArg::Sha256 => HashAlgo::Sha256,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -130,6 +149,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             keep_snapshot,
             parent,
             zstd_level,
+            hash,
         } => {
             let (report, path) = backup(
                 s,
@@ -141,14 +161,15 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                     keep_snapshot,
                     zstd_level,
                     parent_report: parent.as_deref(),
+                    hash: hash.into(),
                 },
             )?;
             if let Some(a) = &report.artifact {
                 println!(
-                    "\nStream: {} ({} bytes, blake3 {})",
+                    "\nStream: {} ({} bytes, {})",
                     a.stream.display(),
                     a.compressed_bytes,
-                    a.blake3
+                    a.digest
                 );
             }
             if let Some(v) = &report.verification {
@@ -225,13 +246,7 @@ fn chain(
             Ok((prior.chain, Some(prior.snapshot)))
         }
         None if streams.is_empty() => bail!("indica los streams o --report"),
-        None => Ok((
-            streams
-                .into_iter()
-                .map(|path| StreamRef { path, blake3: None })
-                .collect(),
-            None,
-        )),
+        None => Ok((streams.into_iter().map(StreamRef::plain).collect(), None)),
     }
 }
 

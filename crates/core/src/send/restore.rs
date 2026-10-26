@@ -9,7 +9,7 @@ use anyhow::{bail, Result};
 use serde::Serialize;
 
 use crate::cmd::{Cmd, Session};
-use crate::send::{hash_file, StreamRef};
+use crate::types::{Digest, StreamRef};
 use crate::verify::{check_received, receive_into};
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,11 +41,11 @@ pub fn restore(s: &mut Session, opts: &RestoreOptions) -> Result<Restored> {
     }
 
     for stream in opts.streams {
-        if let Some(want) = &stream.blake3 {
-            let got = hash_file(&stream.path)?;
+        if let Some(want) = &stream.digest {
+            let got = Digest::of_file(want.algo, &stream.path)?;
             if got != *want {
                 bail!(
-                    "{} está dañado: blake3 {got}, se esperaba {want}; no se ha restaurado nada de él",
+                    "{} está dañado: {got}, se esperaba {want}; no se ha restaurado nada de él",
                     stream.path.display()
                 );
             }
@@ -54,7 +54,7 @@ pub fn restore(s: &mut Session, opts: &RestoreOptions) -> Result<Restored> {
 
     let mut last = PathBuf::new();
     for stream in opts.streams {
-        last = receive_into(s, &stream.path, opts.target)?.0;
+        last = receive_into(s, stream, opts.target)?.0;
     }
     let detail = check_received(s, &last)?;
 

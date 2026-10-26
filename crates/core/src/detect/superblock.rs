@@ -7,9 +7,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use serde::Serialize;
-
-use crate::features::{CompatRo, Features, Incompat};
+use crate::types::{ChecksumStatus, CompatRo, FeatureSet, Incompat, Superblock};
 
 pub const SUPER_OFFSET: u64 = 0x1_0000;
 pub const SUPER_SIZE: usize = 4096;
@@ -20,6 +18,8 @@ const CSUM_TYPE_CRC32C: u16 = 0;
 pub enum SuperblockError {
     #[error("no se pudo leer el superbloque: {0}")]
     Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Denied(String),
     #[error("no es un sistema de archivos Btrfs (magic incorrecto)")]
     BadMagic,
     #[error(
@@ -28,34 +28,15 @@ pub enum SuperblockError {
     BadChecksum { stored: u32, computed: u32 },
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub enum ChecksumStatus {
-    /// crc32c verified.
-    Valid,
-    /// The filesystem uses xxhash/sha256/blake2; not verified here.
-    NotVerified { csum_type: u16 },
+/// Parsing lives here; the struct is shared (`types::Superblock`).
+pub trait SuperblockExt: Sized {
+    fn read_from(path: &Path) -> Result<Self, SuperblockError>;
+    fn parse(buf: &[u8]) -> Result<Self, SuperblockError>;
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Superblock {
-    pub fsid: String,
-    pub label: String,
-    pub generation: u64,
-    pub root: u64,
-    pub chunk_root: u64,
-    pub chunk_root_level: u8,
-    pub total_bytes: u64,
-    pub bytes_used: u64,
-    pub num_devices: u64,
-    pub sectorsize: u32,
-    pub nodesize: u32,
-    pub csum_type: u16,
-    pub checksum: ChecksumStatus,
-    pub features: Features,
-}
-
-impl Superblock {
-    pub fn read_from(path: &Path) -> Result<Self, SuperblockError> {
+impl SuperblockExt for Superblock {
+    fn read_from(path: &Path) -> Result<Self, SuperblockError> {
+        crate::cmd::guard_path(path).map_err(|e| SuperblockError::Denied(e.to_string()))?;
         let mut f = File::open(path)?;
         f.seek(SeekFrom::Start(SUPER_OFFSET))?;
         let mut buf = vec![0u8; SUPER_SIZE];
@@ -63,7 +44,7 @@ impl Superblock {
         Self::parse(&buf)
     }
 
-    pub fn parse(buf: &[u8]) -> Result<Self, SuperblockError> {
+    fn parse(buf: &[u8]) -> Result<Self, SuperblockError> {
         assert!(buf.len() >= SUPER_SIZE, "superblock buffer too short");
         if &buf[0x40..0x48] != MAGIC {
             return Err(SuperblockError::BadMagic);
@@ -98,7 +79,7 @@ impl Superblock {
             nodesize: u32_at(buf, 0x94),
             csum_type,
             checksum,
-            features: Features {
+            features: FeatureSet {
                 compat: u64_at(buf, 0xac),
                 compat_ro: CompatRo(u64_at(buf, 0xb4)),
                 incompat: Incompat(u64_at(buf, 0xbc)),

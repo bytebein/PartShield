@@ -1,37 +1,11 @@
-//! The JSON report written next to every backup.
+//! The JSON report written next to every backup. The schema itself
+//! (`types::Report`, `SCHEMA_VERSION`) is shared and owned by the lead.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local};
-use serde::Serialize;
 
-use crate::cmd::CommandRecord;
-use crate::modes::{Assessment, Mode};
-use crate::send::{Artifact, StreamRef};
-use crate::superblock::Superblock;
-use crate::verify::Verification;
-
-#[derive(Debug, Serialize)]
-pub struct Report {
-    pub tool: &'static str,
-    pub version: &'static str,
-    pub started: DateTime<Local>,
-    pub finished: DateTime<Local>,
-    pub source: PathBuf,
-    pub device: Option<PathBuf>,
-    pub superblock: Option<Superblock>,
-    pub modes: Vec<Assessment>,
-    pub mode: Mode,
-    pub artifact: Option<Artifact>,
-    /// Report of the backup this one is incremental to.
-    pub parent_report: Option<PathBuf>,
-    /// Streams to restore in order to get this backup, base first.
-    pub chain: Vec<StreamRef>,
-    pub verification: Option<Verification>,
-    pub commands: Vec<CommandRecord>,
-    pub error: Option<String>,
-}
+use crate::types::{Report, StreamRef};
 
 impl Report {
     pub fn write_json(&self, path: &Path) -> Result<()> {

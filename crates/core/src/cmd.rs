@@ -38,6 +38,50 @@ impl Cmd {
     }
 }
 
+/// With `PARTSHIELD_SANDBOX=1`, every command is refused if it names a
+/// device other than a loop device. Tests and agents always run with it.
+pub fn sandboxed() -> bool {
+    std::env::var_os("PARTSHIELD_SANDBOX").is_some_and(|v| v == "1")
+}
+
+fn is_real_device(a: &str) -> bool {
+    a.starts_with("/dev/")
+        && !a.starts_with("/dev/loop")
+        && !matches!(a, "/dev/null" | "/dev/zero" | "/dev/urandom")
+}
+
+/// Guard for code that opens a path directly instead of through `Cmd`.
+/// Resolves symlinks (e.g. `/dev/disk/by-uuid/…`) before deciding.
+pub fn guard_path(path: &std::path::Path) -> Result<()> {
+    if !sandboxed() {
+        return Ok(());
+    }
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    for p in [path, resolved.as_path()] {
+        if is_real_device(&p.to_string_lossy()) {
+            bail!(
+                "PARTSHIELD_SANDBOX: acceso directo a {} denegado; en pruebas solo /dev/loop*",
+                p.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+impl Cmd {
+    /// First argument that is a `/dev/` path other than a loop device.
+    fn real_device(&self) -> Option<String> {
+        std::iter::once(&self.program)
+            .chain(&self.args)
+            .map(|a| a.to_string_lossy())
+            .flat_map(|a| {
+                // Also catch `if=/dev/sda` style arguments.
+                a.split('=').map(str::to_string).collect::<Vec<_>>()
+            })
+            .find(|a| is_real_device(a))
+    }
+}
+
 impl fmt::Display for Cmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", quote(&self.program))?;
@@ -80,10 +124,16 @@ impl Session {
         }
     }
 
-    fn announce(&self, cmd: &Cmd) {
+    fn announce(&self, cmd: &Cmd) -> Result<()> {
+        if sandboxed() {
+            if let Some(dev) = cmd.real_device() {
+                bail!("PARTSHIELD_SANDBOX: `{cmd}` toca {dev}; en pruebas solo se permiten /dev/loop*");
+            }
+        }
         if self.echo {
             eprintln!("$ {cmd}");
         }
+        Ok(())
     }
 
     fn record(&mut self, cmd: &Cmd, code: Option<i32>, start: Instant) {
@@ -109,7 +159,7 @@ impl Session {
     }
 
     pub fn run_unchecked(&mut self, cmd: &Cmd) -> Result<Output> {
-        self.announce(cmd);
+        self.announce(cmd)?;
         let start = Instant::now();
         let out = cmd
             .command()
@@ -131,7 +181,7 @@ impl Session {
         cmd: Cmd,
         consume: impl FnOnce(&mut dyn Read) -> Result<T>,
     ) -> Result<T> {
-        self.announce(&cmd);
+        self.announce(&cmd)?;
         let start = Instant::now();
         let mut child = spawn(&cmd, Stdio::null(), Stdio::piped())?;
         let mut stdout = child.stdout.take().expect("piped stdout");
@@ -147,7 +197,7 @@ impl Session {
         cmd: Cmd,
         produce: impl FnOnce(&mut dyn Write) -> Result<()>,
     ) -> Result<()> {
-        self.announce(&cmd);
+        self.announce(&cmd)?;
         let start = Instant::now();
         let mut child = spawn(&cmd, Stdio::piped(), Stdio::null())?;
         let mut stdin = child.stdin.take().expect("piped stdin");
@@ -193,6 +243,21 @@ pub struct Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_spots_real_devices_only() {
+        let real = |c: Cmd| c.real_device();
+        assert_eq!(
+            real(Cmd::new("btrfs").arg("check").arg("/dev/nvme0n1p2")),
+            Some("/dev/nvme0n1p2".into())
+        );
+        assert_eq!(
+            real(Cmd::new("dd").arg("if=/dev/sda").arg("of=x")),
+            Some("/dev/sda".into())
+        );
+        assert_eq!(real(Cmd::new("mount").arg("/dev/loop3").arg("/mnt")), None);
+        assert_eq!(real(Cmd::new("dd").arg("if=/dev/zero")), None);
+    }
 
     #[test]
     fn display_quotes_only_when_needed() {

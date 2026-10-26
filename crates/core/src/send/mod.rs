@@ -4,27 +4,48 @@ use std::fs::File;
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
-
 use crate::cmd::{Cmd, Session};
+use crate::types::{
+    Artifact, BackupMode, BackupRequest, Digest, HashAlgo, Hasher, Mode, StreamRef,
+};
+use anyhow::{bail, Context, Result};
 
-/// One file of a backup chain: a full stream followed by incrementals.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StreamRef {
-    pub path: PathBuf,
-    /// BLAKE3 of the compressed file, when known.
-    pub blake3: Option<String>,
-}
+pub mod restore;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Artifact {
-    pub stream: PathBuf,
-    pub snapshot: PathBuf,
-    /// BLAKE3 of the compressed file, to detect later corruption.
-    pub blake3: String,
-    pub compressed_bytes: u64,
-    pub stream_bytes: u64,
+/// `btrfs send` por subvolumen: el modo por defecto.
+pub struct SendMode;
+
+impl BackupMode for SendMode {
+    fn mode(&self) -> Mode {
+        Mode::Send
+    }
+
+    fn backup(&self, s: &mut Session, req: &BackupRequest) -> Result<Artifact> {
+        send(
+            s,
+            &SendOptions {
+                source: req.source,
+                dest_dir: req.dest_dir,
+                snapshot_dir: req.snapshot_dir,
+                name: req.name,
+                zstd_level: req.zstd_level,
+                parent: req.parent,
+                hash: req.hash,
+            },
+        )
+    }
+
+    fn restore(&self, s: &mut Session, chain: &[StreamRef], target: &Path) -> Result<PathBuf> {
+        let r = restore::restore(
+            s,
+            &restore::RestoreOptions {
+                streams: chain,
+                target,
+                writable_name: None,
+            },
+        )?;
+        Ok(r.received)
+    }
 }
 
 pub struct SendOptions<'a> {
@@ -37,6 +58,7 @@ pub struct SendOptions<'a> {
     pub zstd_level: i32,
     /// Snapshot of the previous backup; makes this one incremental.
     pub parent: Option<&'a Path>,
+    pub hash: HashAlgo,
 }
 
 pub fn ensure_subvolume(s: &mut Session, path: &Path) -> Result<()> {
@@ -90,26 +112,24 @@ pub fn send(s: &mut Session, opts: &SendOptions) -> Result<Artifact> {
 
     let file = File::create(&stream).with_context(|| format!("creando {}", stream.display()))?;
     let result = s.pipe_out(cmd, |out| {
-        let hashing = HashingWriter::new(BufWriter::new(file));
+        let hashing = HashingWriter::new(BufWriter::new(file), opts.hash);
         let mut enc = zstd::Encoder::new(hashing, opts.zstd_level)?;
         enc.multithread(num_threads())?;
         let stream_bytes = io::copy(out, &mut enc)?;
         let mut hashing = enc.finish()?;
         hashing.flush()?;
-        Ok((
-            stream_bytes,
-            hashing.bytes,
-            hashing.hasher.finalize().to_hex().to_string(),
-        ))
+        Ok((stream_bytes, hashing.bytes, hashing.hasher.finalize()))
     });
 
     match result {
-        Ok((stream_bytes, compressed_bytes, blake3)) => Ok(Artifact {
+        Ok((stream_bytes, compressed_bytes, digest)) => Ok(Artifact {
             stream,
             snapshot,
-            blake3,
+            digest,
             compressed_bytes,
             stream_bytes,
+            encryption: None,
+            chunks: None,
         }),
         Err(e) => {
             let _ = std::fs::remove_file(&stream);
@@ -124,28 +144,20 @@ pub fn delete_subvolume(s: &mut Session, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Decompresses a stream file into `w` and returns the BLAKE3 of the
+/// Decompresses a stream file into `w` and returns the digest of the
 /// compressed bytes read.
-pub fn decompress_into(stream: &Path, w: &mut dyn Write) -> Result<String> {
+pub fn decompress_into(stream: &Path, algo: HashAlgo, w: &mut dyn Write) -> Result<Digest> {
     let file = File::open(stream).with_context(|| format!("abriendo {}", stream.display()))?;
     let mut reader = HashingReader {
         inner: io::BufReader::new(file),
-        hasher: blake3::Hasher::new(),
+        hasher: Hasher::new(algo),
     };
     let mut dec = zstd::Decoder::with_buffer(&mut reader)?;
     io::copy(&mut dec, w).context("descomprimiendo el stream")?;
     drop(dec);
     // Hash whatever trailing bytes zstd did not need, so the digest covers the whole file.
     io::copy(&mut reader, &mut io::sink())?;
-    Ok(reader.hasher.finalize().to_hex().to_string())
-}
-
-/// BLAKE3 of a whole file.
-pub fn hash_file(path: &Path) -> Result<String> {
-    let file = File::open(path).with_context(|| format!("abriendo {}", path.display()))?;
-    let mut h = blake3::Hasher::new();
-    h.update_reader(file)?;
-    Ok(h.finalize().to_hex().to_string())
+    Ok(reader.hasher.finalize())
 }
 
 fn num_threads() -> u32 {
@@ -156,15 +168,15 @@ fn num_threads() -> u32 {
 
 struct HashingWriter<W> {
     inner: W,
-    hasher: blake3::Hasher,
+    hasher: Hasher,
     bytes: u64,
 }
 
 impl<W> HashingWriter<W> {
-    fn new(inner: W) -> Self {
+    fn new(inner: W, algo: HashAlgo) -> Self {
         Self {
             inner,
-            hasher: blake3::Hasher::new(),
+            hasher: Hasher::new(algo),
             bytes: 0,
         }
     }
@@ -185,7 +197,7 @@ impl<W: Write> Write for HashingWriter<W> {
 
 struct HashingReader<R> {
     inner: R,
-    hasher: blake3::Hasher,
+    hasher: Hasher,
 }
 
 impl<R: Read> Read for HashingReader<R> {
@@ -215,25 +227,22 @@ mod tests {
 
     #[test]
     fn compress_roundtrip_hash_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("x.zst");
-        let data: Vec<u8> = (0..200_000u32).flat_map(|i| i.to_le_bytes()).collect();
+        for algo in [HashAlgo::Blake3, HashAlgo::Sha256] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("x.zst");
+            let data: Vec<u8> = (0..200_000u32).flat_map(|i| i.to_le_bytes()).collect();
 
-        let hw = HashingWriter::new(File::create(&path).unwrap());
-        let mut enc = zstd::Encoder::new(hw, 3).unwrap();
-        enc.write_all(&data).unwrap();
-        let hw = enc.finish().unwrap();
-        let written_hash = hw.hasher.finalize().to_hex().to_string();
+            let hw = HashingWriter::new(File::create(&path).unwrap(), algo);
+            let mut enc = zstd::Encoder::new(hw, 3).unwrap();
+            enc.write_all(&data).unwrap();
+            let hw = enc.finish().unwrap();
+            let written = hw.hasher.finalize();
 
-        let mut out = Vec::new();
-        let read_hash = decompress_into(&path, &mut out).unwrap();
-        assert_eq!(out, data);
-        assert_eq!(read_hash, written_hash);
-        assert_eq!(
-            read_hash,
-            blake3::hash(&std::fs::read(&path).unwrap())
-                .to_hex()
-                .to_string()
-        );
+            let mut out = Vec::new();
+            let read = decompress_into(&path, algo, &mut out).unwrap();
+            assert_eq!(out, data);
+            assert_eq!(read, written);
+            assert_eq!(read, Digest::of_file(algo, &path).unwrap());
+        }
     }
 }

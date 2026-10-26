@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use partshield_core::cmd::Session;
-use partshield_core::compare::compare_trees;
-use partshield_core::features::CompatRo;
-use partshield_core::modes::Mode;
 use partshield_core::report::load_prior;
-use partshield_core::restore::{restore, RestoreOptions};
-use partshield_core::send::StreamRef;
-use partshield_core::verify::{verify, StepStatus, Verdict, Verification, VerifyOptions};
+use partshield_core::send::restore::{restore, RestoreOptions};
+use partshield_core::types::{
+    CompatRo, HashAlgo, Mode, StepStatus, StreamRef, Verdict, Verification,
+};
+use partshield_core::verify::compare::compare_trees;
+use partshield_core::verify::{verify, VerifyOptions};
 use partshield_core::{backup, BackupOptions};
 
 fn sh(program: &str, args: &[&str]) -> String {
@@ -112,6 +112,7 @@ fn backup_verify_and_detect_corruption() {
             keep_snapshot: true,
             zstd_level: 3,
             parent_report: None,
+            hash: HashAlgo::Blake3,
         },
     )
     .unwrap();
@@ -144,7 +145,9 @@ fn backup_verify_and_detect_corruption() {
             &VerifyOptions {
                 streams: &[StreamRef {
                     path: stream.to_path_buf(),
-                    blake3: Some(artifact.blake3.clone()),
+                    digest: Some(artifact.digest.clone()),
+                    encryption: None,
+                    chunks: None,
                 }],
                 reference: Some(reference),
                 scratch_dir: tmp.path(),
@@ -158,10 +161,7 @@ fn backup_verify_and_detect_corruption() {
     let reduced = verify(
         &mut Session::new(false),
         &VerifyOptions {
-            streams: &[StreamRef {
-                path: artifact.stream.clone(),
-                blake3: None,
-            }],
+            streams: &[StreamRef::plain(artifact.stream.clone())],
             reference: None,
             scratch_dir: tmp.path(),
             scratch_size: 1 << 30,
@@ -228,6 +228,7 @@ fn backup_verify_and_detect_corruption() {
             keep_snapshot: true,
             zstd_level: 3,
             parent_report: Some(&report_path),
+            hash: HashAlgo::Blake3,
         },
     )
     .unwrap();
@@ -275,7 +276,9 @@ fn backup_verify_and_detect_corruption() {
         &RestoreOptions {
             streams: &[StreamRef {
                 path: flipped.clone(),
-                blake3: Some(artifact.blake3.clone()),
+                digest: Some(artifact.digest.clone()),
+                encryption: None,
+                chunks: None,
             }],
             target: &empty,
             writable_name: None,
@@ -301,6 +304,7 @@ fn backup_verify_and_detect_corruption() {
             keep_snapshot: false,
             zstd_level: 3,
             parent_report: Some(&bad_report),
+            hash: HashAlgo::Blake3,
         },
     )
     .unwrap();

@@ -8,44 +8,13 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
-use serde::Serialize;
-
 use crate::cmd::{Cmd, Session};
-use crate::compare::{compare_trees, Comparison};
-use crate::send::{decompress_into, StreamRef};
+use crate::send::decompress_into;
+use crate::types::{Digest, HashAlgo, Step, StepStatus, StreamRef, Verdict, Verification};
+use anyhow::{bail, Context, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepStatus {
-    Passed,
-    Failed,
-    Skipped,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Step {
-    pub name: &'static str,
-    pub status: StepStatus,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    /// Every step passed.
-    Valid,
-    /// Nothing failed, but some steps were skipped.
-    Reduced,
-    Invalid,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Verification {
-    pub verdict: Verdict,
-    pub steps: Vec<Step>,
-    pub comparison: Option<Comparison>,
-}
+pub mod compare;
+use compare::compare_trees;
 
 pub struct VerifyOptions<'a> {
     /// The chain to restore, in order: a full stream, then incrementals.
@@ -87,11 +56,11 @@ pub fn verify(s: &mut Session, opts: &VerifyOptions) -> Result<Verification> {
     let mut mismatches = Vec::new();
     let mut unhashed = 0;
     for stream in opts.streams {
-        match scratch.receive(s, &stream.path) {
+        match scratch.receive(s, stream) {
             Ok((subvol, got)) => {
-                match &stream.blake3 {
+                match &stream.digest {
                     Some(want) if *want != got => mismatches.push(format!(
-                        "{}: blake3 {got}, se esperaba {want}",
+                        "{}: {got}, se esperaba {want}",
                         stream.path.display()
                     )),
                     Some(_) => {}
@@ -123,7 +92,7 @@ pub fn verify(s: &mut Session, opts: &VerifyOptions) -> Result<Verification> {
         Ok(_) => push(
             "integridad",
             StepStatus::Passed,
-            format!("blake3 correcto en {n} stream(s)"),
+            format!("hash correcto en {n} stream(s)"),
         ),
     }
 
@@ -232,18 +201,23 @@ pub(crate) fn check_received(s: &mut Session, subvol: &Path) -> Result<String> {
 }
 
 /// Receives one stream into `dir` and returns the new subvolume and the
-/// BLAKE3 of the compressed file.
+/// digest of the compressed file (same algorithm as the expected one).
 pub(crate) fn receive_into(
     s: &mut Session,
-    stream: &Path,
+    stream: &StreamRef,
     dir: &Path,
-) -> Result<(PathBuf, String)> {
+) -> Result<(PathBuf, Digest)> {
+    let algo = stream
+        .digest
+        .as_ref()
+        .map_or(HashAlgo::default(), |d| d.algo);
     let before = entries(dir)?;
-    let mut hash = String::new();
+    let mut hash = None;
     s.pipe_in(Cmd::new("btrfs").arg("receive").arg(dir), |stdin| {
-        hash = decompress_into(stream, stdin)?;
+        hash = Some(decompress_into(&stream.path, algo, stdin)?);
         Ok(())
     })?;
+    let hash = hash.expect("set when receive succeeds");
     let mut new: Vec<_> = entries(dir)?
         .into_iter()
         .filter(|p| !before.contains(p))
@@ -302,10 +276,9 @@ impl Scratch {
         Ok(me)
     }
 
-    /// Returns the received subvolume and the BLAKE3 of the stream file.
-    fn receive(&mut self, s: &mut Session, stream: &Path) -> Result<(PathBuf, String)> {
-        let (subvol, hash) = receive_into(s, stream, self.mountpoint.path())?;
-        Ok((subvol, hash))
+    /// Returns the received subvolume and the digest of the stream file.
+    fn receive(&mut self, s: &mut Session, stream: &StreamRef) -> Result<(PathBuf, Digest)> {
+        receive_into(s, stream, self.mountpoint.path())
     }
 
     fn check(&mut self, s: &mut Session) -> Result<()> {

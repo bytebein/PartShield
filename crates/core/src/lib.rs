@@ -3,14 +3,20 @@
 //! La interfaz gráfica y la CLI son clientes de esta librería; todo lo que
 //! hace la GUI se puede repetir desde la terminal.
 
+//!
+//! Propiedad de cada módulo (equipo de la Fase 0):
+//! - `types`, `cmd`, `lib`: lead (tipos compartidos, orquestación)
+//! - `detect`: superbloque, features, modos seguros, LUKS/LVM
+//! - `send`: snapshots, send/receive, zstd, incrementales, disposición del disco
+//! - `verify`: restauración de prueba y comprobaciones
+//! - `report`: JSON, HTML, firma
+//! - `tests/`: fixtures y arnés de regresión
+
 pub mod cmd;
-pub mod compare;
-pub mod features;
-pub mod modes;
+pub mod detect;
 pub mod report;
-pub mod restore;
 pub mod send;
-pub mod superblock;
+pub mod types;
 pub mod verify;
 
 use std::path::{Path, PathBuf};
@@ -19,11 +25,10 @@ use anyhow::{bail, Result};
 use chrono::Local;
 
 use cmd::{Cmd, Session};
-use modes::{Mode, Version};
-use report::Report;
-use send::StreamRef;
-use superblock::Superblock;
-use verify::{Verdict, VerifyOptions};
+use detect::{modes, SuperblockExt};
+use send::SendMode;
+use types::{BackupMode, BackupRequest, HashAlgo, Report, Superblock, Version, SCHEMA_VERSION};
+use verify::VerifyOptions;
 
 pub struct BackupOptions<'a> {
     pub source: &'a Path,
@@ -35,6 +40,7 @@ pub struct BackupOptions<'a> {
     /// Report of a previous valid backup whose snapshot was kept; makes
     /// this backup incremental to it.
     pub parent_report: Option<&'a Path>,
+    pub hash: HashAlgo,
 }
 
 /// Installed partclone.btrfs version, if any.
@@ -69,25 +75,31 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
     );
     let report_path = opts.dest_dir.join(format!("{name}.report.json"));
 
+    let mode = SendMode;
     let mut report = Report {
+        schema_version: SCHEMA_VERSION,
         tool: "partshield",
         version: env!("CARGO_PKG_VERSION"),
         started,
         finished: started,
         source: opts.source.to_path_buf(),
         device: None,
+        block_stack: None,
         superblock: None,
         modes: Vec::new(),
-        mode: Mode::Send,
+        mode: mode.mode(),
+        hash_algo: opts.hash,
         artifact: None,
+        layout: None,
         parent_report: opts.parent_report.map(Path::to_path_buf),
         chain: Vec::new(),
         verification: None,
         commands: Vec::new(),
         error: None,
+        signature: None,
     };
 
-    if let Err(e) = run_backup(s, opts, &name, &mut report) {
+    if let Err(e) = run_backup(s, &mode, opts, &name, &mut report) {
         report.error = Some(format!("{e:#}"));
     }
     report.finished = Local::now();
@@ -98,6 +110,7 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
 
 fn run_backup(
     s: &mut Session,
+    mode: &dyn BackupMode,
     opts: &BackupOptions,
     name: &str,
     report: &mut Report,
@@ -129,23 +142,21 @@ fn run_backup(
     report.device = Some(device);
     report.superblock = Some(sb);
 
-    let artifact = send::send(
+    let artifact = mode.backup(
         s,
-        &send::SendOptions {
+        &BackupRequest {
             source: opts.source,
             dest_dir: opts.dest_dir,
-            snapshot_dir: opts.snapshot_dir,
             name,
-            zstd_level: opts.zstd_level,
+            snapshot_dir: opts.snapshot_dir,
             parent: prior.as_ref().map(|p| p.snapshot.as_path()),
+            zstd_level: opts.zstd_level,
+            hash: opts.hash,
         },
     )?;
     report.artifact = Some(artifact.clone());
     report.chain = prior.map(|p| p.chain).unwrap_or_default();
-    report.chain.push(StreamRef {
-        path: artifact.stream.clone(),
-        blake3: Some(artifact.blake3.clone()),
-    });
+    report.chain.push(artifact.stream_ref());
 
     let verification = verify::verify(
         s,
@@ -162,15 +173,6 @@ fn run_backup(
     }
     report.verification = Some(verification?);
     Ok(())
-}
-
-impl Report {
-    pub fn verdict(&self) -> Verdict {
-        match (&self.error, &self.verification) {
-            (None, Some(v)) => v.verdict,
-            _ => Verdict::Invalid,
-        }
-    }
 }
 
 /// First of `stem`, `stem-1`, `stem-2`… that no earlier backup used, so a
