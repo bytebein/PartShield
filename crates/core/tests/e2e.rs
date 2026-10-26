@@ -1,0 +1,213 @@
+//! End-to-end test on a real Btrfs with BLOCK_GROUP_TREE.
+//!
+//! Needs root, loop devices and btrfs-progs, so it only runs with
+//! `PARTSHIELD_E2E=1 cargo test --test e2e`.
+
+use std::fs;
+use std::io::{Seek, SeekFrom, Write};
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use partshield_core::cmd::Session;
+use partshield_core::features::CompatRo;
+use partshield_core::modes::Mode;
+use partshield_core::verify::{verify, StepStatus, Verdict, Verification, VerifyOptions};
+use partshield_core::{backup, BackupOptions};
+
+fn sh(program: &str, args: &[&str]) -> String {
+    let out = Command::new(program).args(args).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{program} {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A loop-mounted Btrfs, unmounted and detached on drop.
+struct Fs {
+    loopdev: String,
+    mnt: PathBuf,
+}
+
+impl Fs {
+    fn new(dir: &Path) -> Self {
+        let img = dir.join("origen.img");
+        fs::File::create(&img).unwrap().set_len(1 << 30).unwrap();
+        sh(
+            "mkfs.btrfs",
+            &[
+                "-q",
+                "-O",
+                "block-group-tree",
+                "-L",
+                "origen",
+                img.to_str().unwrap(),
+            ],
+        );
+        let loopdev = sh("losetup", &["--find", "--show", img.to_str().unwrap()]);
+        let mnt = dir.join("mnt");
+        fs::create_dir(&mnt).unwrap();
+        sh(
+            "mount",
+            &["-o", "compress=zstd", &loopdev, mnt.to_str().unwrap()],
+        );
+        Fs { loopdev, mnt }
+    }
+}
+
+impl Drop for Fs {
+    fn drop(&mut self) {
+        let _ = Command::new("umount").arg(&self.mnt).status();
+        let _ = Command::new("losetup")
+            .arg("--detach")
+            .arg(&self.loopdev)
+            .status();
+    }
+}
+
+fn fill(dir: &Path) {
+    fs::create_dir_all(dir.join("fotos/2026")).unwrap();
+    fs::write(dir.join("notas.txt"), "copias que se restauran de verdad\n").unwrap();
+    let noise: Vec<u8> = (0..5_000_000u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect();
+    fs::write(dir.join("fotos/2026/grande.bin"), noise).unwrap();
+    fs::write(dir.join("secreto"), "solo para mí").unwrap();
+    fs::set_permissions(dir.join("secreto"), fs::Permissions::from_mode(0o600)).unwrap();
+    symlink("fotos/2026/grande.bin", dir.join("enlace")).unwrap();
+}
+
+fn step(v: &Verification, name: &str) -> StepStatus {
+    v.steps.iter().find(|s| s.name == name).unwrap().status
+}
+
+#[test]
+fn backup_verify_and_detect_corruption() {
+    if std::env::var_os("PARTSHIELD_E2E").is_none() {
+        eprintln!("omitido: define PARTSHIELD_E2E=1 (necesita root y loop devices)");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let origin = Fs::new(tmp.path());
+    let source = origin.mnt.join("datos");
+    sh("btrfs", &["subvolume", "create", source.to_str().unwrap()]);
+    fill(&source);
+    let dest = tmp.path().join("copias");
+
+    // 1. A good backup is restored, compared and reported as valid.
+    let mut s = Session::new(false);
+    let (report, report_path) = backup(
+        &mut s,
+        &BackupOptions {
+            source: &source,
+            dest_dir: &dest,
+            snapshot_dir: Some(&origin.mnt),
+            scratch_dir: Some(tmp.path()),
+            keep_snapshot: true,
+            zstd_level: 3,
+        },
+    )
+    .unwrap();
+    assert_eq!(report.error, None);
+    let v = report.verification.as_ref().unwrap();
+    assert_eq!(report.verdict(), Verdict::Valid, "{:#?}", v.steps);
+    assert_eq!(v.comparison.as_ref().unwrap().files, 3);
+    assert!(report_path.exists());
+
+    let sb = report.superblock.as_ref().unwrap();
+    assert!(sb.features.compat_ro.contains(CompatRo::BLOCK_GROUP_TREE));
+    let partclone = report
+        .modes
+        .iter()
+        .find(|m| m.mode == Mode::Partclone)
+        .unwrap();
+    assert!(
+        !partclone.allowed,
+        "partclone sin versión probada no debe permitirse"
+    );
+    assert!(report
+        .commands
+        .iter()
+        .any(|c| c.command.starts_with("btrfs send")));
+
+    let artifact = report.artifact.as_ref().unwrap();
+    let opts = |stream: &Path, reference: &Path| -> Verification {
+        verify(
+            &mut Session::new(false),
+            &VerifyOptions {
+                stream,
+                expected_blake3: Some(&artifact.blake3),
+                reference: Some(reference),
+                scratch_dir: tmp.path(),
+                scratch_size: 1 << 30,
+            },
+        )
+        .unwrap()
+    };
+
+    // 2. Without a reference the verdict is reduced, never valid.
+    let reduced = verify(
+        &mut Session::new(false),
+        &VerifyOptions {
+            stream: &artifact.stream,
+            expected_blake3: None,
+            reference: None,
+            scratch_dir: tmp.path(),
+            scratch_size: 1 << 30,
+        },
+    )
+    .unwrap();
+    assert_eq!(reduced.verdict, Verdict::Reduced);
+
+    // 3. Source changed after the backup: content step fails.
+    let changed = tmp.path().join("cambiado");
+    sh(
+        "cp",
+        &[
+            "-a",
+            artifact.snapshot.to_str().unwrap(),
+            changed.to_str().unwrap(),
+        ],
+    );
+    fs::write(changed.join("notas.txt"), "otra cosa\n").unwrap();
+    let v = opts(&artifact.stream, &changed);
+    assert_eq!(v.verdict, Verdict::Invalid);
+    assert_eq!(step(&v, "contenido"), StepStatus::Failed);
+    assert_eq!(step(&v, "integridad"), StepStatus::Passed);
+
+    // 4. A flipped byte in the stream file is caught.
+    let flipped = tmp.path().join("volteado.btrfs.zst");
+    fs::copy(&artifact.stream, &flipped).unwrap();
+    let mut f = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&flipped)
+        .unwrap();
+    let mid = f.metadata().unwrap().len() / 2;
+    let mut b = [0u8; 1];
+    f.seek(SeekFrom::Start(mid)).unwrap();
+    std::io::Read::read_exact(&mut f, &mut b).unwrap();
+    f.seek(SeekFrom::Start(mid)).unwrap();
+    f.write_all(&[b[0] ^ 0xff]).unwrap();
+    drop(f);
+    let v = opts(&flipped, &artifact.snapshot);
+    assert_eq!(v.verdict, Verdict::Invalid);
+    assert_eq!(step(&v, "integridad"), StepStatus::Failed);
+
+    // 5. A truncated stream (like a copy cut short) cannot be restored.
+    let cut = tmp.path().join("cortado.btrfs.zst");
+    let bytes = fs::read(&artifact.stream).unwrap();
+    fs::write(&cut, &bytes[..bytes.len() / 3]).unwrap();
+    let v = opts(&cut, &artifact.snapshot);
+    assert_eq!(v.verdict, Verdict::Invalid);
+    assert_eq!(step(&v, "restaurar"), StepStatus::Failed);
+
+    // No loop devices or mounts left behind by verification.
+    let loops = sh(
+        "losetup",
+        &["--list", "--noheadings", "--output", "BACK-FILE"],
+    );
+    assert!(!loops.contains("partshield-verify"), "{loops}");
+}
