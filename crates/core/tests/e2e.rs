@@ -6,8 +6,10 @@
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
+
+mod common;
+use common::{sh, FsBuilder, TestFs};
 
 use partshield_core::cmd::Session;
 use partshield_core::report::load_prior;
@@ -19,56 +21,10 @@ use partshield_core::verify::compare::compare_trees;
 use partshield_core::verify::{verify, VerifyOptions};
 use partshield_core::{backup, BackupOptions};
 
-fn sh(program: &str, args: &[&str]) -> String {
-    let out = Command::new(program).args(args).output().unwrap();
-    assert!(
-        out.status.success(),
-        "{program} {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
-/// A loop-mounted Btrfs, unmounted and detached on drop.
-struct Fs {
-    loopdev: String,
-    mnt: PathBuf,
-}
-
-impl Fs {
-    fn new(dir: &Path) -> Self {
-        let img = dir.join("origen.img");
-        fs::File::create(&img).unwrap().set_len(1 << 30).unwrap();
-        sh(
-            "mkfs.btrfs",
-            &[
-                "-q",
-                "-O",
-                "block-group-tree",
-                "-L",
-                "origen",
-                img.to_str().unwrap(),
-            ],
-        );
-        let loopdev = sh("losetup", &["--find", "--show", img.to_str().unwrap()]);
-        let mnt = dir.join("mnt");
-        fs::create_dir(&mnt).unwrap();
-        sh(
-            "mount",
-            &["-o", "compress=zstd", &loopdev, mnt.to_str().unwrap()],
-        );
-        Fs { loopdev, mnt }
-    }
-}
-
-impl Drop for Fs {
-    fn drop(&mut self) {
-        let _ = Command::new("umount").arg(&self.mnt).status();
-        let _ = Command::new("losetup")
-            .arg("--detach")
-            .arg(&self.loopdev)
-            .status();
-    }
+/// A 1 GiB Btrfs with BLOCK_GROUP_TREE mounted with compress=zstd
+/// (`common::TestFs`: unmounted and detached on drop, even on panic).
+fn new_fs(dir: &Path) -> TestFs {
+    FsBuilder::new().size(1 << 30).label("origen").build_in(dir)
 }
 
 fn fill(dir: &Path) {
@@ -89,13 +45,12 @@ fn step(v: &Verification, name: &str) -> StepStatus {
 
 #[test]
 fn backup_verify_and_detect_corruption() {
-    if std::env::var_os("PARTSHIELD_E2E").is_none() {
-        eprintln!("omitido: define PARTSHIELD_E2E=1 (necesita root y loop devices)");
+    if !common::e2e_enabled("backup_verify_and_detect_corruption") {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let origin = Fs::new(tmp.path());
-    let source = origin.mnt.join("datos");
+    let origin = new_fs(tmp.path());
+    let source = origin.top.join("datos");
     sh("btrfs", &["subvolume", "create", source.to_str().unwrap()]);
     fill(&source);
     let dest = tmp.path().join("copias");
@@ -107,7 +62,7 @@ fn backup_verify_and_detect_corruption() {
         &BackupOptions {
             source: &source,
             dest_dir: &dest,
-            snapshot_dir: Some(&origin.mnt),
+            snapshot_dir: Some(&origin.top),
             scratch_dir: Some(tmp.path()),
             keep_snapshot: true,
             zstd_level: 3,
@@ -223,7 +178,7 @@ fn backup_verify_and_detect_corruption() {
         &BackupOptions {
             source: &source,
             dest_dir: &dest,
-            snapshot_dir: Some(&origin.mnt),
+            snapshot_dir: Some(&origin.top),
             scratch_dir: Some(tmp.path()),
             keep_snapshot: true,
             zstd_level: 3,
@@ -251,14 +206,14 @@ fn backup_verify_and_detect_corruption() {
     // 7. Restoring the chain onto another Btrfs gives back the current source.
     let other_dir = tmp.path().join("destino");
     fs::create_dir(&other_dir).unwrap();
-    let other = Fs::new(&other_dir);
+    let mut other = new_fs(&other_dir);
     let prior = load_prior(&incr_path).unwrap();
     assert!(prior.valid);
     let restored = restore(
         &mut Session::new(false),
         &RestoreOptions {
             streams: &prior.chain,
-            target: &other.mnt,
+            target: &other.top,
             writable_name: Some("datos"),
         },
     )
@@ -269,7 +224,7 @@ fn backup_verify_and_detect_corruption() {
     fs::write(writable.join("escribible.txt"), "sí").unwrap();
 
     // 8. A damaged stream is refused before anything is received.
-    let empty = other.mnt.join("vacio");
+    let empty = other.top.join("vacio");
     sh("btrfs", &["subvolume", "create", empty.to_str().unwrap()]);
     let err = restore(
         &mut Session::new(false),
@@ -288,6 +243,26 @@ fn backup_verify_and_detect_corruption() {
     assert!(format!("{err:#}").contains("dañado"), "{err:#}");
     assert_eq!(fs::read_dir(&empty).unwrap().count(), 0);
 
+    // Phase 0 gate: the restored filesystem passes btrfs check and the
+    // restored subvolume mounts on its own and matches the source.
+    other.unmount_all();
+    let check = other.check();
+    assert!(
+        check.status.success(),
+        "btrfs check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let mounted = tmp.path().join("copia-montada");
+    other.mount_subvol("datos", &mounted, ",ro");
+    let c = compare_trees(&source, &mounted).unwrap();
+    assert_eq!(c.total_differences, 1, "{:?}", c.differences);
+    assert!(
+        c.differences[0].contains("escribible.txt"),
+        "{:?}",
+        c.differences
+    );
+    common::assert_same_tree(&source, &mounted, &["escribible.txt"]);
+
     // 9. No incremental on top of a backup that did not verify.
     let bad_report = tmp.path().join("mala.report.json");
     let text = fs::read_to_string(&report_path)
@@ -299,7 +274,7 @@ fn backup_verify_and_detect_corruption() {
         &BackupOptions {
             source: &source,
             dest_dir: &dest,
-            snapshot_dir: Some(&origin.mnt),
+            snapshot_dir: Some(&origin.top),
             scratch_dir: Some(tmp.path()),
             keep_snapshot: false,
             zstd_level: 3,
