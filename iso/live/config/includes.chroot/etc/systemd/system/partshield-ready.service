@@ -1,0 +1,11 @@
+[Unit]
+Description=PartShield: anunciar arranque completo
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/partshield/ready.sh
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

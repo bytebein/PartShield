@@ -1,0 +1,56 @@
+# Sistema live
+live-boot
+live-config
+live-config-systemd
+systemd-sysv
+sudo
+locales
+console-setup
+keyboard-configuration
+bash-completion
+less
+nano
+man-db
+
+# Secure Boot (shim y GRUB firmados por Debian; el kernel de Debian ya viene firmado)
+shim-signed
+grub-efi-amd64-signed
+mokutil
+
+# PartShield y lo que usa (partshield, btrfs-progs y partclone llegan de
+# packages.chroot, compilados por nosotros: ver iso/versions.env)
+partshield
+btrfs-progs
+partclone
+zstd
+gdisk
+fdisk
+parted
+dosfstools
+mtools
+exfatprogs
+e2fsprogs
+xfsprogs
+ntfs-3g
+cryptsetup
+lvm2
+mdadm
+
+# Recuperación y diagnóstico
+gddrescue
+testdisk
+smartmontools
+nvme-cli
+hdparm
+pciutils
+usbutils
+lsof
+
+# Red (copiar a un NAS, descargar actualizaciones)
+network-manager
+openssh-client
+rsync
+nfs-common
+cifs-utils
+ca-certificates
+curl

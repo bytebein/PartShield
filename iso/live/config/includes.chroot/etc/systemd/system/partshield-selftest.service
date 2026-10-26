@@ -1,0 +1,14 @@
+[Unit]
+Description=PartShield: autoprueba de copia y verificación
+After=partshield-ready.service
+ConditionKernelCommandLine=|partshield.selftest
+ConditionCredential=|partshield.selftest
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/partshield/selftest.sh
+StandardOutput=journal+console
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target
