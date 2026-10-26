@@ -10,8 +10,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use partshield_core::cmd::Session;
+use partshield_core::compare::compare_trees;
 use partshield_core::features::CompatRo;
 use partshield_core::modes::Mode;
+use partshield_core::report::load_prior;
+use partshield_core::restore::{restore, RestoreOptions};
+use partshield_core::send::StreamRef;
 use partshield_core::verify::{verify, StepStatus, Verdict, Verification, VerifyOptions};
 use partshield_core::{backup, BackupOptions};
 
@@ -107,6 +111,7 @@ fn backup_verify_and_detect_corruption() {
             scratch_dir: Some(tmp.path()),
             keep_snapshot: true,
             zstd_level: 3,
+            parent_report: None,
         },
     )
     .unwrap();
@@ -137,8 +142,10 @@ fn backup_verify_and_detect_corruption() {
         verify(
             &mut Session::new(false),
             &VerifyOptions {
-                stream,
-                expected_blake3: Some(&artifact.blake3),
+                streams: &[StreamRef {
+                    path: stream.to_path_buf(),
+                    blake3: Some(artifact.blake3.clone()),
+                }],
                 reference: Some(reference),
                 scratch_dir: tmp.path(),
                 scratch_size: 1 << 30,
@@ -151,8 +158,10 @@ fn backup_verify_and_detect_corruption() {
     let reduced = verify(
         &mut Session::new(false),
         &VerifyOptions {
-            stream: &artifact.stream,
-            expected_blake3: None,
+            streams: &[StreamRef {
+                path: artifact.stream.clone(),
+                blake3: None,
+            }],
             reference: None,
             scratch_dir: tmp.path(),
             scratch_size: 1 << 30,
@@ -203,6 +212,100 @@ fn backup_verify_and_detect_corruption() {
     let v = opts(&cut, &artifact.snapshot);
     assert_eq!(v.verdict, Verdict::Invalid);
     assert_eq!(step(&v, "restaurar"), StepStatus::Failed);
+
+    // 6. Incremental backup on top of the first: only the changes travel,
+    //    and verification restores the whole chain.
+    fs::write(source.join("notas.txt"), "segunda versión\n").unwrap();
+    fs::write(source.join("nuevo.txt"), "añadido después").unwrap();
+    fs::remove_file(source.join("secreto")).unwrap();
+    let (incr, incr_path) = backup(
+        &mut Session::new(false),
+        &BackupOptions {
+            source: &source,
+            dest_dir: &dest,
+            snapshot_dir: Some(&origin.mnt),
+            scratch_dir: Some(tmp.path()),
+            keep_snapshot: true,
+            zstd_level: 3,
+            parent_report: Some(&report_path),
+        },
+    )
+    .unwrap();
+    let iv = incr.verification.as_ref().unwrap();
+    assert_eq!(
+        incr.verdict(),
+        Verdict::Valid,
+        "{:?} {:#?}",
+        incr.error,
+        iv.steps
+    );
+    assert_eq!(incr.chain.len(), 2);
+    assert!(incr
+        .commands
+        .iter()
+        .any(|c| c.command.starts_with("btrfs send -p")));
+    let incr_artifact = incr.artifact.as_ref().unwrap();
+    assert!(incr_artifact.compressed_bytes * 10 < artifact.compressed_bytes);
+
+    // 7. Restoring the chain onto another Btrfs gives back the current source.
+    let other_dir = tmp.path().join("destino");
+    fs::create_dir(&other_dir).unwrap();
+    let other = Fs::new(&other_dir);
+    let prior = load_prior(&incr_path).unwrap();
+    assert!(prior.valid);
+    let restored = restore(
+        &mut Session::new(false),
+        &RestoreOptions {
+            streams: &prior.chain,
+            target: &other.mnt,
+            writable_name: Some("datos"),
+        },
+    )
+    .unwrap();
+    let writable = restored.writable.unwrap();
+    let c = compare_trees(&source, &writable).unwrap();
+    assert!(c.identical(), "{:?}", c.differences);
+    fs::write(writable.join("escribible.txt"), "sí").unwrap();
+
+    // 8. A damaged stream is refused before anything is received.
+    let empty = other.mnt.join("vacio");
+    sh("btrfs", &["subvolume", "create", empty.to_str().unwrap()]);
+    let err = restore(
+        &mut Session::new(false),
+        &RestoreOptions {
+            streams: &[StreamRef {
+                path: flipped.clone(),
+                blake3: Some(artifact.blake3.clone()),
+            }],
+            target: &empty,
+            writable_name: None,
+        },
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("dañado"), "{err:#}");
+    assert_eq!(fs::read_dir(&empty).unwrap().count(), 0);
+
+    // 9. No incremental on top of a backup that did not verify.
+    let bad_report = tmp.path().join("mala.report.json");
+    let text = fs::read_to_string(&report_path)
+        .unwrap()
+        .replace("\"verdict\": \"valid\"", "\"verdict\": \"invalid\"");
+    fs::write(&bad_report, text).unwrap();
+    let (refused, _) = backup(
+        &mut Session::new(false),
+        &BackupOptions {
+            source: &source,
+            dest_dir: &dest,
+            snapshot_dir: Some(&origin.mnt),
+            scratch_dir: Some(tmp.path()),
+            keep_snapshot: false,
+            zstd_level: 3,
+            parent_report: Some(&bad_report),
+        },
+    )
+    .unwrap();
+    assert_eq!(refused.verdict(), Verdict::Invalid);
+    assert!(refused.error.unwrap().contains("no es válida"));
 
     // No loop devices or mounts left behind by verification.
     let loops = sh(

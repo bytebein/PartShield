@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::cmd::{Cmd, Session};
 use crate::compare::{compare_trees, Comparison};
-use crate::send::decompress_into;
+use crate::send::{decompress_into, StreamRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,10 +48,10 @@ pub struct Verification {
 }
 
 pub struct VerifyOptions<'a> {
-    pub stream: &'a Path,
-    pub expected_blake3: Option<&'a str>,
-    /// Tree the restored subvolume must match (usually the snapshot that
-    /// was sent). `None` skips the content step.
+    /// The chain to restore, in order: a full stream, then incrementals.
+    pub streams: &'a [StreamRef],
+    /// Tree the last restored subvolume must match (usually the snapshot
+    /// that was sent). `None` skips the content step.
     pub reference: Option<&'a Path>,
     pub scratch_dir: &'a Path,
     /// Apparent size of the sparse scratch image.
@@ -67,6 +67,9 @@ pub const STEPS: [&str; 5] = [
 ];
 
 pub fn verify(s: &mut Session, opts: &VerifyOptions) -> Result<Verification> {
+    if opts.streams.is_empty() {
+        bail!("no hay ningún stream que verificar");
+    }
     let mut steps: Vec<Step> = Vec::new();
     let mut comparison = None;
     let mut push = |name, status, detail: String| {
@@ -79,26 +82,48 @@ pub fn verify(s: &mut Session, opts: &VerifyOptions) -> Result<Verification> {
 
     let mut scratch = Scratch::create(s, opts.scratch_dir, opts.scratch_size)?;
 
-    // Restoring also hashes the compressed file, which feeds "integridad".
-    let restored = scratch.receive(s, opts.stream);
-    match (&restored, opts.expected_blake3) {
-        (Ok((_, got)), Some(want)) if got == want => {
-            push("integridad", StepStatus::Passed, format!("blake3 {got}"))
+    // Restoring also hashes each compressed file, which feeds "integridad".
+    let mut restored = Ok(PathBuf::new());
+    let mut mismatches = Vec::new();
+    let mut unhashed = 0;
+    for stream in opts.streams {
+        match scratch.receive(s, &stream.path) {
+            Ok((subvol, got)) => {
+                match &stream.blake3 {
+                    Some(want) if *want != got => mismatches.push(format!(
+                        "{}: blake3 {got}, se esperaba {want}",
+                        stream.path.display()
+                    )),
+                    Some(_) => {}
+                    None => unhashed += 1,
+                }
+                restored = Ok(subvol);
+            }
+            Err(e) => {
+                restored = Err(e.context(format!("restaurando {}", stream.path.display())));
+                break;
+            }
         }
-        (Ok((_, got)), Some(want)) => push(
+    }
+    let n = opts.streams.len();
+    match &restored {
+        Err(_) => push(
             "integridad",
             StepStatus::Failed,
-            format!("blake3 {got}, se esperaba {want}"),
+            "algún stream no se pudo leer entero".into(),
         ),
-        (Ok(_), None) => push(
+        Ok(_) if !mismatches.is_empty() => {
+            push("integridad", StepStatus::Failed, mismatches.join("; "))
+        }
+        Ok(_) if unhashed > 0 => push(
             "integridad",
             StepStatus::Skipped,
-            "no hay hash de referencia".into(),
+            format!("{unhashed} de {n} streams sin hash de referencia"),
         ),
-        (Err(_), _) => push(
+        Ok(_) => push(
             "integridad",
-            StepStatus::Failed,
-            "el stream no se pudo leer entero".into(),
+            StepStatus::Passed,
+            format!("blake3 correcto en {n} stream(s)"),
         ),
     }
 
@@ -113,11 +138,11 @@ pub fn verify(s: &mut Session, opts: &VerifyOptions) -> Result<Verification> {
                 );
             }
         }
-        Ok((subvol, _)) => {
+        Ok(subvol) => {
             push(
                 "restaurar",
                 StepStatus::Passed,
-                format!("recibido en {}", subvol.display()),
+                format!("{n} stream(s) recibidos; último en {}", subvol.display()),
             );
 
             match check_received(s, &subvol) {
@@ -179,7 +204,7 @@ pub fn verify(s: &mut Session, opts: &VerifyOptions) -> Result<Verification> {
     })
 }
 
-fn check_received(s: &mut Session, subvol: &Path) -> Result<String> {
+pub(crate) fn check_received(s: &mut Session, subvol: &Path) -> Result<String> {
     let show = s.run(Cmd::new("btrfs").arg("subvolume").arg("show").arg(subvol))?;
     let received = show
         .lines()
@@ -204,6 +229,40 @@ fn check_received(s: &mut Session, subvol: &Path) -> Result<String> {
         );
     }
     Ok(format!("solo lectura, Received UUID {received}"))
+}
+
+/// Receives one stream into `dir` and returns the new subvolume and the
+/// BLAKE3 of the compressed file.
+pub(crate) fn receive_into(
+    s: &mut Session,
+    stream: &Path,
+    dir: &Path,
+) -> Result<(PathBuf, String)> {
+    let before = entries(dir)?;
+    let mut hash = String::new();
+    s.pipe_in(Cmd::new("btrfs").arg("receive").arg(dir), |stdin| {
+        hash = decompress_into(stream, stdin)?;
+        Ok(())
+    })?;
+    let mut new: Vec<_> = entries(dir)?
+        .into_iter()
+        .filter(|p| !before.contains(p))
+        .collect();
+    match new.len() {
+        1 => Ok((new.remove(0), hash)),
+        n => bail!(
+            "se esperaba un subvolumen nuevo en {} y hay {n}",
+            dir.display()
+        ),
+    }
+}
+
+fn entries(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut v = Vec::new();
+    for e in std::fs::read_dir(dir).with_context(|| format!("leyendo {}", dir.display()))? {
+        v.push(e?.path());
+    }
+    Ok(v)
 }
 
 /// Sparse image + loop device + mount, torn down on every path.
@@ -245,20 +304,8 @@ impl Scratch {
 
     /// Returns the received subvolume and the BLAKE3 of the stream file.
     fn receive(&mut self, s: &mut Session, stream: &Path) -> Result<(PathBuf, String)> {
-        let mut hash = String::new();
-        s.pipe_in(
-            Cmd::new("btrfs").arg("receive").arg(self.mountpoint.path()),
-            |stdin| {
-                hash = decompress_into(stream, stdin)?;
-                Ok(())
-            },
-        )?;
-        let mut entries =
-            std::fs::read_dir(self.mountpoint.path())?.collect::<Result<Vec<_>, _>>()?;
-        match entries.len() {
-            1 => Ok((entries.remove(0).path(), hash)),
-            n => bail!("se esperaba un subvolumen recibido y hay {n} entradas"),
-        }
+        let (subvol, hash) = receive_into(s, stream, self.mountpoint.path())?;
+        Ok((subvol, hash))
     }
 
     fn check(&mut self, s: &mut Session) -> Result<()> {

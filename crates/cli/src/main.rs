@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use partshield_core::cmd::Session;
 use partshield_core::modes;
+use partshield_core::report::load_prior;
+use partshield_core::restore::{restore, RestoreOptions};
+use partshield_core::send::StreamRef;
 use partshield_core::superblock::{ChecksumStatus, Superblock};
 use partshield_core::verify::{self, StepStatus, Verdict, Verification, VerifyOptions};
 use partshield_core::{backup, partclone_version, BackupOptions};
@@ -45,18 +48,22 @@ enum Command {
         /// Conservar el snapshot (base para copias incrementales).
         #[arg(long)]
         keep_snapshot: bool,
+        /// Informe de una copia válida anterior: la nueva será incremental a ella.
+        #[arg(long)]
+        parent: Option<PathBuf>,
         #[arg(long, default_value_t = 3)]
         zstd_level: i32,
     },
-    /// Verifica un stream restaurándolo en un Btrfs temporal.
+    /// Verifica una copia restaurándola en un Btrfs temporal.
     Verify {
-        stream: PathBuf,
+        /// Streams en orden (completo y luego incrementales), si no se da --report.
+        streams: Vec<PathBuf>,
+        /// Informe de la copia: toma de él la cadena y los hashes.
+        #[arg(long, conflicts_with = "streams")]
+        report: Option<PathBuf>,
         /// Árbol con el que debe coincidir lo restaurado.
         #[arg(long)]
         against: Option<PathBuf>,
-        /// Hash BLAKE3 esperado del archivo comprimido.
-        #[arg(long)]
-        blake3: Option<String>,
         #[arg(long, default_value = "/var/tmp")]
         scratch_dir: PathBuf,
         /// Tamaño de la imagen temporal en GiB (es sparse).
@@ -65,6 +72,20 @@ enum Command {
         /// Aceptar como correcta una verificación con pasos omitidos.
         #[arg(long)]
         accept_reduced: bool,
+    },
+    /// Restaura una copia en un Btrfs montado.
+    Restore {
+        /// Streams en orden (completo y luego incrementales), si no se da --report.
+        streams: Vec<PathBuf>,
+        /// Informe de la copia: toma de él la cadena y los hashes.
+        #[arg(long, conflicts_with = "streams")]
+        report: Option<PathBuf>,
+        /// Carpeta del Btrfs de destino.
+        #[arg(long)]
+        to: PathBuf,
+        /// Crear además un subvolumen escribible con este nombre (p. ej. home).
+        #[arg(long = "as")]
+        writable: Option<String>,
     },
 }
 
@@ -107,6 +128,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             snapshot_dir,
             scratch_dir,
             keep_snapshot,
+            parent,
             zstd_level,
         } => {
             let (report, path) = backup(
@@ -118,6 +140,7 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
                     scratch_dir: scratch_dir.as_deref(),
                     keep_snapshot,
                     zstd_level,
+                    parent_report: parent.as_deref(),
                 },
             )?;
             if let Some(a) = &report.artifact {
@@ -138,19 +161,21 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             Ok(verdict_exit(report.verdict(), false))
         }
         Command::Verify {
-            stream,
+            streams,
+            report,
             against,
-            blake3,
             scratch_dir,
             scratch_gib,
             accept_reduced,
         } => {
+            let (chain, snapshot) = chain(report, streams)?;
+            // Without --against, compare with the backup's own snapshot if it was kept.
+            let reference = against.or(snapshot.filter(|p| p.exists()));
             let v = verify::verify(
                 s,
                 &VerifyOptions {
-                    stream: &stream,
-                    expected_blake3: blake3.as_deref(),
-                    reference: against.as_deref(),
+                    streams: &chain,
+                    reference: reference.as_deref(),
                     scratch_dir: &scratch_dir,
                     scratch_size: scratch_gib << 30,
                 },
@@ -158,6 +183,55 @@ fn run(command: Command, s: &mut Session) -> Result<ExitCode> {
             print_verification(&v);
             Ok(verdict_exit(v.verdict, accept_reduced))
         }
+        Command::Restore {
+            streams,
+            report,
+            to,
+            writable,
+        } => {
+            let (chain, _) = chain(report, streams)?;
+            let r = restore(
+                s,
+                &RestoreOptions {
+                    streams: &chain,
+                    target: &to,
+                    writable_name: writable.as_deref(),
+                },
+            )?;
+            println!("\nRestaurado: {} ({})", r.received.display(), r.detail);
+            if let Some(w) = &r.writable {
+                println!("Subvolumen escribible: {}", w.display());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// The streams to work on, from a report (plus its snapshot) or given in
+/// order on the command line.
+fn chain(
+    report: Option<PathBuf>,
+    streams: Vec<PathBuf>,
+) -> Result<(Vec<StreamRef>, Option<PathBuf>)> {
+    match report {
+        Some(path) => {
+            let prior = load_prior(&path)?;
+            if !prior.valid {
+                eprintln!(
+                    "aviso: {} no es una copia válida; se usa igualmente",
+                    path.display()
+                );
+            }
+            Ok((prior.chain, Some(prior.snapshot)))
+        }
+        None if streams.is_empty() => bail!("indica los streams o --report"),
+        None => Ok((
+            streams
+                .into_iter()
+                .map(|path| StreamRef { path, blake3: None })
+                .collect(),
+            None,
+        )),
     }
 }
 

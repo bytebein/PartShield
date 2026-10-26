@@ -8,18 +8,20 @@ pub mod compare;
 pub mod features;
 pub mod modes;
 pub mod report;
+pub mod restore;
 pub mod send;
 pub mod superblock;
 pub mod verify;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::Local;
 
 use cmd::{Cmd, Session};
 use modes::{Mode, Version};
 use report::Report;
+use send::StreamRef;
 use superblock::Superblock;
 use verify::{Verdict, VerifyOptions};
 
@@ -30,6 +32,9 @@ pub struct BackupOptions<'a> {
     pub scratch_dir: Option<&'a Path>,
     pub keep_snapshot: bool,
     pub zstd_level: i32,
+    /// Report of a previous valid backup whose snapshot was kept; makes
+    /// this backup incremental to it.
+    pub parent_report: Option<&'a Path>,
 }
 
 /// Installed partclone.btrfs version, if any.
@@ -46,13 +51,23 @@ pub fn partclone_version(s: &mut Session) -> Option<Version> {
 /// an `Err` here means the report itself could not be produced.
 pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)> {
     let started = Local::now();
-    let name = format!(
+    std::fs::create_dir_all(opts.dest_dir)?;
+    let dest_dir = opts.dest_dir.canonicalize()?;
+    let opts = &BackupOptions {
+        dest_dir: &dest_dir,
+        ..*opts
+    };
+    let stem = format!(
         "{}-{}",
         base_name(opts.source),
         started.format("%Y%m%d-%H%M%S")
     );
+    let name = unique_name(
+        &stem,
+        opts.dest_dir,
+        opts.snapshot_dir.unwrap_or(opts.source),
+    );
     let report_path = opts.dest_dir.join(format!("{name}.report.json"));
-    std::fs::create_dir_all(opts.dest_dir)?;
 
     let mut report = Report {
         tool: "partshield",
@@ -65,6 +80,8 @@ pub fn backup(s: &mut Session, opts: &BackupOptions) -> Result<(Report, PathBuf)
         modes: Vec::new(),
         mode: Mode::Send,
         artifact: None,
+        parent_report: opts.parent_report.map(Path::to_path_buf),
+        chain: Vec::new(),
         verification: None,
         commands: Vec::new(),
         error: None,
@@ -85,6 +102,26 @@ fn run_backup(
     name: &str,
     report: &mut Report,
 ) -> Result<()> {
+    let prior = match opts.parent_report {
+        None => None,
+        Some(p) => {
+            let prior = report::load_prior(p)?;
+            if !prior.valid {
+                bail!(
+                    "la copia de {} no es válida; no se encadena una incremental a ella",
+                    p.display()
+                );
+            }
+            if !prior.snapshot.exists() {
+                bail!(
+                    "el snapshot {} ya no existe; la copia base debe hacerse con --keep-snapshot",
+                    prior.snapshot.display()
+                );
+            }
+            Some(prior)
+        }
+    };
+
     let device = send::backing_device(s, opts.source)?;
     let sb = Superblock::read_from(&device)?;
     report.modes = modes::assess(&sb.features, partclone_version(s));
@@ -100,15 +137,20 @@ fn run_backup(
             snapshot_dir: opts.snapshot_dir,
             name,
             zstd_level: opts.zstd_level,
+            parent: prior.as_ref().map(|p| p.snapshot.as_path()),
         },
     )?;
     report.artifact = Some(artifact.clone());
+    report.chain = prior.map(|p| p.chain).unwrap_or_default();
+    report.chain.push(StreamRef {
+        path: artifact.stream.clone(),
+        blake3: Some(artifact.blake3.clone()),
+    });
 
     let verification = verify::verify(
         s,
         &VerifyOptions {
-            stream: &artifact.stream,
-            expected_blake3: Some(&artifact.blake3),
+            streams: &report.chain,
             reference: Some(&artifact.snapshot),
             scratch_dir: opts.scratch_dir.unwrap_or(opts.dest_dir),
             scratch_size,
@@ -131,9 +173,44 @@ impl Report {
     }
 }
 
+/// First of `stem`, `stem-1`, `stem-2`… that no earlier backup used, so a
+/// second backup in the same second never touches the first one's files.
+fn unique_name(stem: &str, dest_dir: &Path, snapshot_dir: &Path) -> String {
+    (0..)
+        .map(|i| match i {
+            0 => stem.to_string(),
+            i => format!("{stem}-{i}"),
+        })
+        .find(|n| {
+            let taken = [
+                dest_dir.join(format!("{n}.report.json")),
+                dest_dir.join(format!("{n}.btrfs.zst")),
+                snapshot_dir.join(format!(".partshield-{n}")),
+            ];
+            !taken.iter().any(|p| p.exists())
+        })
+        .expect("an unused name exists")
+}
+
 fn base_name(p: &Path) -> String {
     p.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "raiz".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_name_skips_every_taken_file() {
+        let dest = tempfile::tempdir().unwrap();
+        let snaps = tempfile::tempdir().unwrap();
+        assert_eq!(unique_name("home-1", dest.path(), snaps.path()), "home-1");
+        std::fs::write(dest.path().join("home-1.report.json"), "").unwrap();
+        std::fs::write(dest.path().join("home-1-1.btrfs.zst"), "").unwrap();
+        std::fs::create_dir(snaps.path().join(".partshield-home-1-2")).unwrap();
+        assert_eq!(unique_name("home-1", dest.path(), snaps.path()), "home-1-3");
+    }
 }

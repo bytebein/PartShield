@@ -5,9 +5,17 @@ use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cmd::{Cmd, Session};
+
+/// One file of a backup chain: a full stream followed by incrementals.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamRef {
+    pub path: PathBuf,
+    /// BLAKE3 of the compressed file, when known.
+    pub blake3: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Artifact {
@@ -27,6 +35,8 @@ pub struct SendOptions<'a> {
     pub snapshot_dir: Option<&'a Path>,
     pub name: &'a str,
     pub zstd_level: i32,
+    /// Snapshot of the previous backup; makes this one incremental.
+    pub parent: Option<&'a Path>,
 }
 
 pub fn ensure_subvolume(s: &mut Session, path: &Path) -> Result<()> {
@@ -72,8 +82,14 @@ pub fn send(s: &mut Session, opts: &SendOptions) -> Result<Artifact> {
             .arg(&snapshot),
     )?;
 
+    let mut cmd = Cmd::new("btrfs").arg("send");
+    if let Some(parent) = opts.parent {
+        cmd = cmd.arg("-p").arg(parent);
+    }
+    let cmd = cmd.arg(&snapshot);
+
     let file = File::create(&stream).with_context(|| format!("creando {}", stream.display()))?;
-    let result = s.pipe_out(Cmd::new("btrfs").arg("send").arg(&snapshot), |out| {
+    let result = s.pipe_out(cmd, |out| {
         let hashing = HashingWriter::new(BufWriter::new(file));
         let mut enc = zstd::Encoder::new(hashing, opts.zstd_level)?;
         enc.multithread(num_threads())?;
@@ -122,6 +138,14 @@ pub fn decompress_into(stream: &Path, w: &mut dyn Write) -> Result<String> {
     // Hash whatever trailing bytes zstd did not need, so the digest covers the whole file.
     io::copy(&mut reader, &mut io::sink())?;
     Ok(reader.hasher.finalize().to_hex().to_string())
+}
+
+/// BLAKE3 of a whole file.
+pub fn hash_file(path: &Path) -> Result<String> {
+    let file = File::open(path).with_context(|| format!("abriendo {}", path.display()))?;
+    let mut h = blake3::Hasher::new();
+    h.update_reader(file)?;
+    Ok(h.finalize().to_hex().to_string())
 }
 
 fn num_threads() -> u32 {
