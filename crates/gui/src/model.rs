@@ -38,10 +38,12 @@ pub fn detect(device: &Path) -> Result<DetectInfo> {
         };
         anyhow!("{e}{hint}")
     })?;
-    let superblock = copies
-        .primary()
-        .cloned()
-        .ok_or_else(|| anyhow!("el superbloque principal de {} no es válido", device.display()))?;
+    let superblock = copies.primary().cloned().ok_or_else(|| {
+        anyhow!(
+            "el superbloque principal de {} no es válido",
+            device.display()
+        )
+    })?;
     let modes = assess_with_kernel(
         &superblock.features,
         partclone_version(&mut s),

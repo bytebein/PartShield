@@ -61,7 +61,45 @@ pub fn list(s: &mut Session) -> Result<Vec<Disk>> {
             .arg("-o")
             .arg(LSBLK_COLUMNS),
     )?;
-    parse(&out)
+    let mut disks = parse(&out)?;
+    fill_missing_fstypes(s, &mut disks);
+    Ok(disks)
+}
+
+/// Sin udev (contenedores, algunos sistemas de rescate) lsblk no sabe el
+/// tipo de sistema de archivos. `blkid -p` lo lee de la cabecera, sin
+/// escribir nada. Un disco sin particiones se prueba como volumen.
+fn fill_missing_fstypes(s: &mut Session, disks: &mut [Disk]) {
+    for disk in disks.iter_mut() {
+        if disk.volumes.is_empty() {
+            if let Some((fstype, uuid)) = probe(s, &disk.path) {
+                disk.volumes.push(Volume {
+                    path: disk.path.clone(),
+                    kind: disk.kind.clone(),
+                    depth: 0,
+                    size: disk.size,
+                    fstype: Some(fstype),
+                    label: None,
+                    uuid,
+                    mountpoints: Vec::new(),
+                });
+            }
+        }
+        for v in disk.volumes.iter_mut().filter(|v| v.fstype.is_none()) {
+            if let Some((fstype, uuid)) = probe(s, &v.path) {
+                v.fstype = Some(fstype);
+                v.uuid = v.uuid.take().or(uuid);
+            }
+        }
+    }
+}
+
+fn probe(s: &mut Session, dev: &std::path::Path) -> Option<(String, Option<String>)> {
+    let out = s
+        .run_unchecked(&Cmd::new("blkid").arg("-p").arg("-o").arg("export").arg(dev))
+        .ok()?;
+    let (uuid, fstype) = super::blockdev::parse_blkid_export(&out.stdout);
+    fstype.map(|f| (f, uuid))
 }
 
 /// Discos de `lsblk -J -b -o LSBLK_COLUMNS`. Omite zram, cdrom vacíos y

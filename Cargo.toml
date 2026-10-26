@@ -1,8 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli"]
-# crates/gui (en desarrollo) se añadirá como miembro fuera de default-members:
-# necesita GTK 4 y libadwaita instalados.
+members = ["crates/core", "crates/cli", "crates/gui"]
+# La interfaz necesita GTK 4 y libadwaita instalados: queda fuera de
+# `cargo build`/`cargo test` por defecto; se compila con `-p partshield-gui`.
+default-members = ["crates/core", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
