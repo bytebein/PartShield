@@ -3,6 +3,7 @@
 
 pub mod blockdev;
 pub mod csum;
+pub mod devices;
 pub mod modes;
 pub mod superblock;
 

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/cli"]
+# crates/gui (en desarrollo) se añadirá como miembro fuera de default-members:
+# necesita GTK 4 y libadwaita instalados.
 
 [workspace.package]
 version = "0.1.0"
