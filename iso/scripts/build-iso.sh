@@ -36,7 +36,14 @@ cp /out/debs/*.deb "$B/config/packages.chroot/"
 cd "$B"
 
 log "lb config"
+chmod +x auto/config
 lb config >/dev/null
+# Si auto/config no se ejecutó, live-build construye con sus valores por
+# defecto (testing, sin Secure Boot) sin avisar. Mejor fallar.
+grep -q '^LB_DISTRIBUTION="trixie"' config/bootstrap \
+    || { echo "lb config no aplicó auto/config (¿no es ejecutable?)" >&2; exit 1; }
+grep -q '^LB_UEFI_SECURE_BOOT="enable"' config/binary \
+    || { echo "lb config no activó Secure Boot" >&2; exit 1; }
 log "lb build (tarda: debootstrap, paquetes, squashfs, ISO)"
 lb build 2>&1 | tee /out/lb-build.log | grep -E '^P:|^E:|^W:' || true
 
