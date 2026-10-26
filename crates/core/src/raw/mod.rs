@@ -21,9 +21,10 @@ use serde::Deserialize;
 use crate::cmd::{guard_path, Cmd, Session};
 use crate::detect::SuperblockExt;
 use crate::types::{
-    Artifact, Digest, HashAlgo, Hasher, RawImage, Step, StepStatus, StreamRef, Superblock, Verdict,
+    Artifact, Digest, HashAlgo, Hasher, RawImage, Step, StepStatus, StreamRef, Superblock,
     Verification,
 };
+use crate::verify::{verdict_of, COMPARACION, ESTRUCTURA, MONTAJE, MUESTRA, RESTAURAR};
 
 /// Tamaño de lectura y de la unidad de escritura dispersa.
 const BLOCK: usize = 4 << 20;
@@ -278,29 +279,29 @@ pub fn verify(
             ((StepStatus::Failed, msg), cmp)
         }
     };
-    push("restaurar", restore_ok.0, restore_ok.1);
+    push(RESTAURAR, restore_ok.0, restore_ok.1);
 
     // 2. estructura y 3. montaje, solo con una imagen completa.
     if restored.is_ok() {
         let is_btrfs = Superblock::read_from(&scratch.image).is_ok();
         match scratch.attach(s) {
             Err(e) => {
-                push("estructura", StepStatus::Failed, format!("{e:#}"));
-                push("montaje", StepStatus::Failed, format!("{e:#}"));
+                push(ESTRUCTURA, StepStatus::Failed, format!("{e:#}"));
+                push(MONTAJE, StepStatus::Failed, format!("{e:#}"));
             }
             Ok(dev) => {
                 if is_btrfs {
                     match s.run(Cmd::new("btrfs").arg("check").arg("--readonly").arg(&dev)) {
                         Ok(_) => push(
-                            "estructura",
+                            ESTRUCTURA,
                             StepStatus::Passed,
                             "btrfs check --readonly sin errores".into(),
                         ),
-                        Err(e) => push("estructura", StepStatus::Failed, format!("{e:#}")),
+                        Err(e) => push(ESTRUCTURA, StepStatus::Failed, format!("{e:#}")),
                     }
                 } else {
                     push(
-                        "estructura",
+                        ESTRUCTURA,
                         StepStatus::Skipped,
                         "no es Btrfs; no hay comprobador de estructura para este contenido".into(),
                     );
@@ -311,12 +312,12 @@ pub fn verify(
                         StepStatus::Passed,
                         "montada en solo lectura".into(),
                     ),
-                    Err(e) => push("montaje", StepStatus::Failed, format!("{e:#}")),
+                    Err(e) => push(MONTAJE, StepStatus::Failed, format!("{e:#}")),
                 }
             }
         }
     } else {
-        for name in ["estructura", "montaje"] {
+        for name in [ESTRUCTURA, MONTAJE] {
             push(
                 name,
                 StepStatus::Failed,
@@ -325,7 +326,7 @@ pub fn verify(
         }
     }
 
-    push("comparación", comparison.0, comparison.1);
+    push(COMPARACION, comparison.0, comparison.1);
 
     // 5. muestra: relee trozos del dispositivo original y los compara con la
     //    imagen restaurada (detecta un origen que cambió después de la copia).
@@ -337,7 +338,7 @@ pub fn verify(
         );
     } else {
         match sample_against_source(raw, &scratch.image) {
-            Ok(Some(detail)) => push("muestra", StepStatus::Passed, detail),
+            Ok(Some(detail)) => push(MUESTRA, StepStatus::Passed, detail),
             Ok(None) => push(
                 "muestra",
                 StepStatus::Skipped,
@@ -346,29 +347,17 @@ pub fn verify(
                     raw.device.display()
                 ),
             ),
-            Err(e) => push("muestra", StepStatus::Failed, format!("{e:#}")),
+            Err(e) => push(MUESTRA, StepStatus::Failed, format!("{e:#}")),
         }
     }
 
     scratch.cleanup(s);
-    let verdict = verdict(&steps);
+    let verdict = verdict_of(&steps);
     Ok(Verification {
         verdict,
         steps,
         comparison: None,
     })
-}
-
-/// Válida solo si todos los pasos pasaron; un paso omitido la deja en
-/// reducida y uno fallido, en no válida.
-pub fn verdict(steps: &[Step]) -> Verdict {
-    if steps.is_empty() || steps.iter().any(|x| x.status == StepStatus::Failed) {
-        Verdict::Invalid
-    } else if steps.iter().any(|x| x.status == StepStatus::Skipped) {
-        Verdict::Reduced
-    } else {
-        Verdict::Valid
-    }
 }
 
 const SAMPLES: usize = 64;
@@ -688,20 +677,6 @@ mod tests {
         )
         .is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"m\xc3\xado");
-    }
-
-    #[test]
-    fn verdict_requires_every_step() {
-        let st = |status| Step {
-            name: "x",
-            status,
-            detail: String::new(),
-        };
-        use StepStatus::*;
-        assert_eq!(verdict(&vec![st(Passed); 5]), Verdict::Valid);
-        assert_eq!(verdict(&[st(Passed), st(Skipped)]), Verdict::Reduced);
-        assert_eq!(verdict(&[st(Skipped), st(Failed)]), Verdict::Invalid);
-        assert_eq!(verdict(&[]), Verdict::Invalid);
     }
 
     #[test]

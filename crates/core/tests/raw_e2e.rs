@@ -135,7 +135,7 @@ fn raw_image_backup_verify_restore() {
             "restaurar",
             "estructura",
             "montaje",
-            "comparación",
+            "comparacion",
             "muestra"
         ]
     );
@@ -216,7 +216,7 @@ fn raw_image_backup_verify_restore() {
     let v = raw::verify(&mut Session::new(false), &stream, &image, tmp.path()).unwrap();
     assert_eq!(v.verdict, Verdict::Invalid);
     assert_eq!(step(&v, "muestra"), StepStatus::Failed);
-    assert_eq!(step(&v, "comparación"), StepStatus::Passed);
+    assert_eq!(step(&v, "comparacion"), StepStatus::Passed);
 
     let loops = sh(
         "losetup",

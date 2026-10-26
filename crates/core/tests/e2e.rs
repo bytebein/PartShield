@@ -184,8 +184,8 @@ fn backup_verify_and_detect_corruption() {
     fs::write(changed.join("notas.txt"), "otra cosa\n").unwrap();
     let v = opts(&artifact.stream, &changed);
     assert_eq!(v.verdict, Verdict::Invalid);
-    assert_eq!(step(&v, "contenido"), StepStatus::Failed);
-    assert_eq!(step(&v, "integridad"), StepStatus::Passed);
+    assert_eq!(step(&v, "comparacion"), StepStatus::Failed);
+    assert_eq!(step(&v, "restaurar"), StepStatus::Passed);
 
     // 4. A flipped byte in the stream file is caught.
     let flipped = tmp.path().join("volteado.btrfs.zst");
@@ -204,7 +204,7 @@ fn backup_verify_and_detect_corruption() {
     drop(f);
     let v = opts(&flipped, &artifact.snapshot);
     assert_eq!(v.verdict, Verdict::Invalid);
-    assert_eq!(step(&v, "integridad"), StepStatus::Failed);
+    assert_eq!(step(&v, "restaurar"), StepStatus::Failed);
 
     // 5. A truncated stream (like a copy cut short) cannot be restored.
     let cut = tmp.path().join("cortado.btrfs.zst");
