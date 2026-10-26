@@ -73,7 +73,10 @@ pub fn parse(json: &str) -> Result<Vec<Disk>> {
         let kind = text(d, "type").unwrap_or_default();
         let size = number(d, "size");
         let name = text(d, "name").unwrap_or_default();
-        if name.starts_with("zram") || size == 0 || !matches!(kind.as_str(), "disk" | "loop" | "rom") {
+        if name.starts_with("zram")
+            || size == 0
+            || !matches!(kind.as_str(), "disk" | "loop" | "rom")
+        {
             continue;
         }
         let mut volumes = Vec::new();
@@ -144,7 +147,9 @@ fn number(v: &Value, key: &str) -> u64 {
 }
 
 fn flag(v: &Value, key: &str) -> bool {
-    v[key].as_bool().unwrap_or_else(|| v[key].as_str() == Some("1") || v[key].as_u64() == Some(1))
+    v[key]
+        .as_bool()
+        .unwrap_or_else(|| v[key].as_str() == Some("1") || v[key].as_u64() == Some(1))
 }
 
 /// 512110190592 → "477 GiB".
@@ -205,7 +210,10 @@ mod tests {
 
         let usb = &disks[2];
         assert!(usb.removable);
-        assert!(usb.volumes[0].is_live_medium(), "ISO formateada en todo el disco");
+        assert!(
+            usb.volumes[0].is_live_medium(),
+            "ISO formateada en todo el disco"
+        );
     }
 
     #[test]
