@@ -7,6 +7,7 @@
 # - uefi        OVMF sin Secure Boot
 # - secureboot  OVMF con Secure Boot activado y las claves de Microsoft:
 #               exige secureboot=1 en el anuncio (shim y GRUB firmados)
+# - gui         BIOS; espera a la interfaz y guarda una captura (boot-logs/gui.ppm)
 # - selftest    UEFI + autoprueba de copia y verificación dentro de la ISO,
 #               pedida con una credencial SMBIOS (no toca el menú de arranque)
 #
