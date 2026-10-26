@@ -18,9 +18,28 @@ fi
 if [ -n "$scale" ] && [ "$scale" != 1 ] && [ -n "$out" ]; then
     wlr-randr --output "$out" --scale "$scale" || true
 fi
-# PARTSHIELD_GUI_READY también al puerto serie, para las pruebas en QEMU.
-if [ -w /dev/ttyS0 ]; then
-    partshield-gui | tee /dev/ttyS0
-else
-    exec partshield-gui
-fi
+# Una ejecución de la interfaz; deja su código de salida en $RC.
+# PARTSHIELD_GUI_READY va también al puerto serie, para las pruebas en QEMU.
+RC=/run/partshield/gui.rc
+mkdir -p /run/partshield
+run() {
+    if [ -w /dev/ttyS0 ]; then
+        { partshield-gui; echo $? > "$RC"; } | tee /dev/ttyS0
+    else
+        partshield-gui
+        echo $? > "$RC"
+    fi
+}
+
+# «Salir a la consola» sale con 0. Si se cae, se relanza (hasta 3 veces)
+# en vez de dejar la pantalla en una consola.
+tries=0
+while :; do
+    run
+    rc=$(cat "$RC" 2>/dev/null || echo 1)
+    [ "$rc" = 0 ] && exit 0
+    tries=$((tries + 1))
+    echo "partshield-gui salió con el código $rc ($tries/3)" >&2
+    [ $tries -ge 3 ] && exit "$rc"
+    sleep 1
+done

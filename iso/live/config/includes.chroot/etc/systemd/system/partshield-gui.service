@@ -6,6 +6,9 @@ ConditionKernelCommandLine=!partshield.nogui
 After=partshield-ready.service systemd-user-sessions.service systemd-logind.service
 Conflicts=getty@tty7.service
 Before=getty.target
+# Si se cae, vuelve; pero no en bucle si falla siempre.
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 # Como root: la interfaz lee discos. PAMName crea una sesión de logind
@@ -26,9 +29,11 @@ Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
 Environment=XKB_DEFAULT_LAYOUT=es
 ExecStartPre=-/usr/bin/chvt 7
 ExecStart=/usr/bin/cage -s -- /usr/lib/partshield/gui-session.sh
-# Al salir (botón «Salir a la consola» o fallo) se vuelve a la consola.
+# Al salir con «Salir a la consola» (código 0) se queda en la consola; si
+# la interfaz se cae, se reinicia. ExecStopPost vuelve a tty1 en ambos casos.
 ExecStopPost=-/usr/bin/chvt 1
-Restart=no
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=graphical.target multi-user.target
