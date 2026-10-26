@@ -42,6 +42,13 @@ impl Volume {
         self.fstype.as_deref() == Some("btrfs")
     }
 
+    /// El sistema de archivos del live USB (squashfs de live-boot).
+    pub fn is_live_system(&self) -> bool {
+        self.mountpoints
+            .iter()
+            .any(|m| m.starts_with("/run/live/rootfs") || m.starts_with("/lib/live/mount/rootfs"))
+    }
+
     /// El USB desde el que arrancó la ISO.
     pub fn is_live_medium(&self) -> bool {
         self.mountpoints
@@ -123,6 +130,11 @@ pub fn parse(json: &str) -> Result<Vec<Disk>> {
             volumes.push(volume(d, 0));
         }
         collect(d, 0, &mut volumes);
+        // El propio sistema del USB de PartShield (el squashfs montado por
+        // live-boot): no es un disco del usuario.
+        if kind == "loop" && volumes.iter().any(Volume::is_live_system) {
+            continue;
+        }
         disks.push(Disk {
             path: path_of(d),
             kind,
@@ -222,6 +234,7 @@ mod tests {
       {"name":"nvme1n1","path":"/dev/nvme1n1","type":"disk","size":"2000398934016","fstype":null,"label":null,"uuid":null,"model":"WD_BLACK SN850X 2000GB ","serial":"23XYZ","tran":"nvme","rm":"0","mountpoints":[null]},
       {"name":"sda","path":"/dev/sda","type":"disk","size":31029460992,"fstype":"iso9660","label":"PARTSHIELD","uuid":null,"model":"Ultra Fit","serial":"4C53","tran":"usb","rm":true,"mountpoints":["/run/live/medium"]},
       {"name":"zram0","path":"/dev/zram0","type":"disk","size":8589934592,"fstype":"swap","label":null,"uuid":null,"model":null,"serial":null,"tran":null,"rm":false,"mountpoints":["[SWAP]"]},
+      {"name":"loop0","path":"/dev/loop0","type":"loop","size":772800512,"fstype":"squashfs","label":null,"uuid":null,"model":null,"serial":null,"tran":null,"rm":false,"mountpoints":["/run/live/rootfs/filesystem.squashfs"]},
       {"name":"loop7","path":"/dev/loop7","type":"loop","size":0,"fstype":null,"label":null,"uuid":null,"model":null,"serial":null,"tran":null,"rm":false,"mountpoints":[null]}
     ]}"#;
 

@@ -25,7 +25,7 @@ Environment=XDG_SESSION_TYPE=wayland
 Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
 Environment=XKB_DEFAULT_LAYOUT=es
 ExecStartPre=-/usr/bin/chvt 7
-ExecStart=/usr/bin/cage -s -- /usr/bin/partshield-gui
+ExecStart=/usr/bin/cage -s -- /usr/lib/partshield/gui-session.sh
 # Al salir (botón «Salir a la consola» o fallo) se vuelve a la consola.
 ExecStopPost=-/usr/bin/chvt 1
 Restart=no

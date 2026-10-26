@@ -8,7 +8,10 @@ export PARTSHIELD_SANDBOX=1
 W=/run/partshield-selftest
 mkdir -p "$W/origen" "$W/copias" "$W/scratch"
 trap 'umount "$W/origen" 2>/dev/null; [ -n "${dev:-}" ] && losetup -d "$dev" 2>/dev/null' EXIT
-fail() { echo "PARTSHIELD_SELFTEST=FAIL $*"; exit 1; }
+# La consola principal es la pantalla (console=tty0 va la última); las
+# marcas de prueba van también al puerto serie, que es el que lee QEMU.
+say() { echo "$*"; [ -w /dev/ttyS0 ] && echo "$*" > /dev/ttyS0 2>/dev/null; true; }
+fail() { say "PARTSHIELD_SELFTEST=FAIL $*"; exit 1; }
 
 truncate -s 512M "$W/origen.img"
 mkfs.btrfs -q -O block-group-tree "$W/origen.img" || fail mkfs
@@ -24,4 +27,4 @@ rc=$?
 tail -8 "$W/backup.log"
 [ $rc -eq 0 ] || fail "partshield backup salió con $rc"
 grep -q "COPIA VÁLIDA" "$W/backup.log" || fail "veredicto distinto de válida"
-echo "PARTSHIELD_SELFTEST=OK"
+say "PARTSHIELD_SELFTEST=OK"

@@ -39,6 +39,7 @@ mdadm
 # Interfaz: partshield-gui a pantalla completa en cage (Wayland, sin escritorio)
 partshield-gui
 cage
+wlr-randr
 libgtk-4-1
 libadwaita-1-0
 libgl1-mesa-dri

@@ -27,6 +27,6 @@ lb config noauto \
     --iso-application "PartShield" \
     --iso-publisher "PartShield; https://partshield.io" \
     --iso-volume "PARTSHIELD" \
-    --bootappend-live "boot=live components username=partshield hostname=partshield locales=es_ES.UTF-8 keyboard-layouts=es console=tty0 console=ttyS0,115200n8" \
+    --bootappend-live "boot=live components username=partshield hostname=partshield locales=es_ES.UTF-8 keyboard-layouts=es console=ttyS0,115200n8 console=tty0" \
     --cache-packages true \
     "${@}"
