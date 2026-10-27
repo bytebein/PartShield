@@ -16,6 +16,10 @@ use crate::model::{self, Destination, PlanEvent, PlanItem};
 use crate::{disks_page, error_status, group, header, plain_row, result_view};
 
 pub const CSS: &str = "
+/* El verde del logo como color de acento (libadwaita 1.6+ y anteriores). */
+:root { --accent-bg-color: #1f7a57; --accent-color: #1f7a57; }
+@define-color accent_bg_color #1f7a57;
+@define-color accent_color #1f7a57;
 .hero-title { font-size: 2.4em; font-weight: 800; }
 .action-card { padding: 28px 24px; }
 .action-card .card-title { font-size: 1.35em; font-weight: 700; }
@@ -44,9 +48,7 @@ pub fn home_page(app: &adw::Application, nav: &adw::NavigationView) -> adw::Navi
     head.pack_end(&adv_box);
     toolbar.add_top_bar(&head);
 
-    let icon = gtk::Image::from_icon_name("drive-harddisk-symbolic");
-    icon.set_pixel_size(72);
-    icon.add_css_class("accent");
+    let icon = logo(96);
     let title = gtk::Label::new(Some("PartShield"));
     title.add_css_class("hero-title");
     let tagline = gtk::Label::new(Some(
@@ -113,6 +115,25 @@ pub fn home_page(app: &adw::Application, nav: &adw::NavigationView) -> adw::Navi
         .tag("inicio")
         .child(&toolbar)
         .build()
+}
+
+/// El logo (assets/logo.svg), dibujado al doble de tamaño para pantallas
+/// HiDPI. Sin el cargador SVG de gdk-pixbuf, un icono genérico.
+fn logo(size: i32) -> gtk::Image {
+    let svg = include_bytes!("../../../assets/logo.svg");
+    let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    loader.set_size(size * 2, size * 2);
+    let pixbuf = loader
+        .write(svg)
+        .and_then(|_| loader.close())
+        .ok()
+        .and_then(|_| loader.pixbuf());
+    let img = match pixbuf {
+        Some(p) => gtk::Image::from_paintable(Some(&gtk::gdk::Texture::for_pixbuf(&p))),
+        None => gtk::Image::from_icon_name("drive-harddisk-symbolic"),
+    };
+    img.set_pixel_size(size);
+    img
 }
 
 fn action_card(icon: &str, title: &str, text: &str) -> gtk::Button {

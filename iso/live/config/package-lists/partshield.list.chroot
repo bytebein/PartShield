@@ -51,6 +51,8 @@ libgles2
 fonts-cantarell
 fonts-dejavu-core
 adwaita-icon-theme
+# Cargador SVG de gdk-pixbuf: el logo de la pantalla de inicio.
+librsvg2-common
 hicolor-icon-theme
 xkb-data
 dbus-user-session
