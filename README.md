@@ -1,101 +1,135 @@
-# PartShield
+<p align="center">
+  <img src="assets/logo.svg" width="112" alt="">
+</p>
 
-[partshield.io](https://partshield.io) · [partshield.dev](https://partshield.dev)
+<h1 align="center">PartShield</h1>
 
-Copias de Btrfs que no se dan por buenas hasta que se han restaurado y comprobado.
+<p align="center">
+  <strong>Copias de seguridad que se restauran y se comprueban antes de darlas por buenas.</strong>
+</p>
 
-Nace del fallo de partclone con `BLOCK_GROUP_TREE`
+<p align="center">
+  <a href="https://partshield.io"><img src="https://img.shields.io/badge/web-partshield.io-1f7a57" alt="partshield.io"></a>
+  <img src="https://img.shields.io/badge/Rust-1f7a57?logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/Debian_13-live_USB-1f7a57?logo=debian&logoColor=white" alt="Debian 13">
+  <img src="https://img.shields.io/badge/Secure_Boot-s%C3%AD-1f7a57" alt="Secure Boot">
+  <img src="https://img.shields.io/badge/estado-en_desarrollo-9a5b00" alt="En desarrollo">
+</p>
+
+<p align="center">
+  <img src="assets/capturas/inicio.png" width="720" alt="Pantalla de inicio de PartShield">
+</p>
+
+---
+
+## Por qué
+
+Una copia no está hecha hasta que se ha restaurado.
+
+PartShield nace de un fallo real: partclone copiaba sistemas Btrfs con
+`BLOCK_GROUP_TREE` y los daba por buenos, pero no montaban porque el
+`chunk_root` nunca se había copiado
 ([partclone#303](https://github.com/Thomas-Tsai/partclone/issues/303),
-[rescuezilla#672](https://github.com/rescuezilla/rescuezilla/issues/672)): tres copias
-marcadas como correctas que no montaban porque el `chunk_root` nunca se copió.
+[rescuezilla#672](https://github.com/rescuezilla/rescuezilla/issues/672)).
+Tres copias «correctas» que no servían para nada.
 
-Esto es la **Fase 0**: el motor en Rust y una CLI. La interfaz gráfica y el live USB
-(Debian 13 *trixie*, la estable actual, con Secure Boot) vienen después y usan este mismo motor.
+Por eso PartShield no se fía de que la copia termine sin errores. La restaura
+aparte, la monta, la compara con el original y solo entonces dice si vale.
 
-## Qué hace
+## Cómo se usa
 
-- **`inspect`**: lee el superbloque directamente del disco (comprobando su crc32c),
-  lista las features y dice qué modos de copia son seguros. partclone se bloquea si
-  es anterior a 0.3.50 o si hay alguna feature que no está en la lista probada.
-- **`backup`**: snapshot de solo lectura → `btrfs send` comprimido con zstd → verificación.
-  Con `--parent <informe>` la copia es incremental (`btrfs send -p`) sobre una copia
-  anterior **válida** cuyo snapshot se conservó (`--keep-snapshot`).
-- **`backup --mode raw`**: imagen sector a sector del dispositivo entero, al estilo de
-  `dd`, comprimida con zstd. Sirve para lo que no sea Btrfs o tenga features no
-  probadas. Se niega si el origen está montado en lectura-escritura. Su verificación
-  exige que los bytes restaurados den el mismo hash que el dispositivo, monta la copia,
-  pasa `btrfs check` si es Btrfs y relee 64 trozos del origen para detectar cambios.
-  `restore` la escribe en un dispositivo igual o mayor, o en un archivo nuevo disperso.
-- **`restore`**: restaura la cadena (completa + incrementales) en un Btrfs montado y,
-  con `--as`, deja un subvolumen escribible. Comprueba el BLAKE3 de cada stream
-  **antes** de recibirlo: un archivo dañado no llega a aplicarse a medias.
-- **`verify`**: restaura la cadena en un Btrfs temporal (archivo sparse + loop) y pasa
-  cinco pasos:
+Arranca el USB de PartShield (Debian 13 con Secure Boot, sin escritorio: solo
+la aplicación) y haz la copia en tres pasos.
 
-| Paso | Qué comprueba |
+| | |
 | --- | --- |
-| integridad | BLAKE3 del archivo comprimido igual al de la copia |
-| restaurar | `btrfs receive` termina sin error |
-| subvolumen | El subvolumen restaurado es de solo lectura y tiene Received UUID |
-| contenido | Mismo árbol que el origen: tipos, tamaños, permisos, propietarios, enlaces y BLAKE3 de cada archivo |
-| estructura | `btrfs check --readonly` sobre el sistema de archivos temporal |
+| **1 · Qué copiar** | El disco entero o solo las particiones que quieras, con casillas. |
+| **2 · Dónde** | Otro disco, por ejemplo un USB. No se borra nada de lo que haya. |
+| **3 · Empezar** | Una barra mientras se copia y se comprueba. |
 
-El resultado es **válida** solo si pasan los cinco. Con algún paso omitido es
-**reducida** (código de salida 2, salvo `--accept-reduced`) y con cualquier fallo, **no válida**.
+<p align="center">
+  <img src="assets/capturas/copia.png" width="720" alt="Elegir qué copiar y dónde">
+</p>
 
-Cada comando externo se muestra antes de ejecutarse y queda registrado en el informe
-JSON que se guarda junto a la copia. El informe guarda también la cadena de streams con
-sus hashes, nunca se sobrescribe, y si el disco de copias se monta en otra ruta los
-streams se buscan junto al informe.
+Al final, una de tres respuestas:
 
-## Uso
+| | Resultado | Qué significa |
+| --- | --- | --- |
+| 🟢 | **Copia comprobada** | Se ha restaurado aparte y coincide con el original. Se puede restaurar. |
+| 🟡 | **Sin comprobar del todo** | No falló nada, pero algún paso no se pudo hacer. Mira cuál antes de fiarte. |
+| 🔴 | **No vale** | Algo falló. No confíes en esta copia. |
 
-Necesita root, `btrfs-progs`, `util-linux` (losetup, mount, findmnt) y loop devices.
+<p align="center">
+  <img src="assets/capturas/resultado.png" width="720" alt="Resultado: copia comprobada">
+</p>
+
+El interruptor **Avanzado** enseña todo lo demás: superbloque, features,
+modos de copia seguros, subvolúmenes y cada comando que se ejecuta.
+
+## Cómo comprueba
+
+Cada copia pasa cinco pasos. Solo es **válida** si pasan los cinco.
+
+| Paso | Btrfs (`btrfs send`) | Resto (sector a sector) |
+| --- | --- | --- |
+| **restaurar** | `btrfs receive` en un Btrfs temporal, con el hash de cada stream comprobado antes | Se escribe la imagen en un archivo temporal |
+| **estructura** | `btrfs check --readonly` | El fsck de su sistema de archivos en solo lectura (ext4, vfat, exFAT, XFS, NTFS) |
+| **montaje** | Se monta en solo lectura | Se monta en solo lectura |
+| **comparación** | Scrub y mismo árbol que el original: tipos, tamaños, permisos, propietarios y enlaces | Idéntica bit a bit al dispositivo |
+| **muestra** | BLAKE3 de una muestra de archivos contra el original | Se releen 64 trozos del origen y se comparan |
+
+Cada comando externo se muestra antes de ejecutarse y queda en el informe
+(JSON y HTML, firmable con ed25519) que se guarda junto a la copia.
+
+## Línea de órdenes
+
+La GUI y la CLI usan el mismo motor.
 
 ```sh
 cargo build --release
 sudo target/release/partshield inspect /dev/nvme0n1p2
 
-# Copia completa conservando el snapshot, y después incrementales sobre ella
-sudo target/release/partshield backup /home --dest /mnt/usb/copias --keep-snapshot
+# Copia de varios subvolúmenes con tabla de particiones, ESP y UUID
+sudo target/release/partshield backup --subvol @=/ --subvol @home=/home --layout \
+    --dest /mnt/usb/copias --keep-snapshot
+
+# Incremental sobre una copia anterior válida
 sudo target/release/partshield backup /home --dest /mnt/usb/copias --keep-snapshot \
     --parent /mnt/usb/copias/home-AAAAMMDD-HHMMSS.report.json
 
-# Volver a verificar una copia (compara con su snapshot si sigue existiendo)
-sudo target/release/partshield verify --report /mnt/usb/copias/home-XXXX.report.json
+# Imagen sector a sector de una partición desmontada
+sudo target/release/partshield backup --mode raw /dev/sdb2 --dest /mnt/usb/copias
 
-# Restaurar en otro Btrfs y dejar /mnt/nuevo/home escribible
+# Volver a verificar y restaurar
+sudo target/release/partshield verify --report /mnt/usb/copias/home-XXXX.report.json
 sudo target/release/partshield restore --report /mnt/usb/copias/home-XXXX.report.json \
     --to /mnt/nuevo --as home
-
-# Imagen sector a sector de una partición desmontada (o montada en solo lectura)
-sudo target/release/partshield backup --mode raw /dev/sdb2 --dest /mnt/usb/copias
-sudo target/release/partshield restore --report /mnt/usb/copias/sdb2-XXXX.report.json --to /dev/sdc2
 ```
 
-## Tests
+`partshield --help` lista el resto: `restore-layout` y `verify-report`.
+
+## Desarrollo
 
 ```sh
-cargo test                                  # unitarios
-sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_E2E=1 cargo test --test e2e     # puerta de la Fase 0
-sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_E2E=1 cargo test --test raw_e2e # modo raw
+cargo fmt --check && cargo clippy --all-targets && cargo test
+
+# Puertas de punta a punta: root y loop devices, nunca discos reales
+sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_E2E=1 cargo test --test e2e --test raw_e2e --test multi_e2e
+sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_GUI_E2E=1 cargo test -p partshield-gui
 ```
 
-El test de punta a punta crea un Btrfs con `block-group-tree` y comprueba:
+Con `PARTSHIELD_SANDBOX=1`, PartShield se niega a tocar cualquier `/dev/` que
+no sea un loop device.
 
-- una copia completa válida y que la verificación detecta un origen cambiado, un byte
-  alterado, un stream cortado y la falta de referencia;
-- una incremental que solo lleva los cambios y verifica la cadena entera;
-- que restaurar la cadena en otro Btrfs devuelve exactamente el origen actual;
-- que un stream dañado se rechaza antes de recibir nada;
-- que no se encadena una incremental sobre una copia no válida.
+| Carpeta | Qué hay |
+| --- | --- |
+| `crates/core` | El motor: detección, send, raw, verificación e informes |
+| `crates/cli` | La línea de órdenes |
+| `crates/gui` | La interfaz (GTK 4 + libadwaita) |
+| `iso` | El live USB con live-build, y sus pruebas de arranque en QEMU |
+| `web` | partshield.io |
 
-## Pendiente
+## Hoja de ruta
 
-- Varios subvolúmenes y tabla de particiones/ESP en una sola copia
-- Modo partclone
-- Informe HTML firmado con ed25519
-- Interfaz gráfica (gtk4-rs + libadwaita)
-- Live USB con live-build sobre Debian 13 *trixie* (la estable actual): Secure Boot con shim-signed y el kernel
-  firmado de Debian, btrfs-progs y partclone compilados y fijados, y arranque probado
-  en QEMU con BIOS, UEFI y Secure Boot
+Lo que viene (restaurar desde la interfaz, porcentaje real, LUKS, GParted en
+la ISO…) está en [ROADMAP.md](ROADMAP.md).
