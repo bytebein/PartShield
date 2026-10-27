@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias (GTK 4, libadwaita y herramientas de disco)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev \
+            btrfs-progs e2fsprogs dosfstools mtools gdisk fdisk zstd
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Las pruebas de punta a punta necesitan root y loop devices: se
+      # ejecutan a mano (ver CONTRIBUTING.md); aquí se omiten solas.
+      - run: cargo test --workspace

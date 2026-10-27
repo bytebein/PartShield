@@ -9,6 +9,9 @@ default-members = ["crates/core", "crates/cli"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/bytebein/PartShield"
+homepage = "https://partshield.io"
 
 [workspace.dependencies]
 anyhow = "1"

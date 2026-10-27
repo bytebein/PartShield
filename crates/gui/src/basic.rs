@@ -12,7 +12,7 @@ use gtk::{gio, glib};
 use partshield_core::detect::devices::{human_size, Disk, Volume};
 use partshield_core::types::{Report, Verdict};
 
-use crate::model::{self, Destination, PlanEvent, PlanItem};
+use crate::model::{self, Destination, PartResult, PlanEvent, PlanItem};
 use crate::{disks_page, error_status, group, header, plain_row, result_view};
 
 pub const CSS: &str = "
@@ -666,7 +666,7 @@ fn progress_page(
 
     let n = items.len();
     let (tx, rx) = mpsc::channel::<PlanEvent>();
-    let results: Rc<RefCell<Vec<Option<Result<(Report, PathBuf), String>>>>> =
+    let results: Rc<RefCell<Vec<Option<PartResult>>>> =
         Rc::new(RefCell::new((0..n).map(|_| None).collect()));
     let tables: Rc<RefCell<Vec<Result<PathBuf, String>>>> = Rc::default();
     let current = Rc::new(Cell::new(0usize));
@@ -707,7 +707,7 @@ fn progress_page(
                         adj.set_value(adj.upper());
                     }
                     PlanEvent::Done(i, r) => {
-                        results.borrow_mut()[i] = Some(r);
+                        results.borrow_mut()[i] = Some(*r);
                         finished = i + 1 == n;
                     }
                     PlanEvent::Table(r) => tables.borrow_mut().push(r),
@@ -766,7 +766,7 @@ fn is_verify_command(c: &str) -> bool {
 fn summary_view(
     nav: &adw::NavigationView,
     titles: &[String],
-    results: Vec<Result<(Report, PathBuf), String>>,
+    results: Vec<PartResult>,
     tables: &[Result<PathBuf, String>],
 ) -> gtk::Widget {
     let results: Vec<Result<(Rc<Report>, PathBuf), String>> = results

@@ -13,6 +13,8 @@
   <img src="https://img.shields.io/badge/Rust-1f7a57?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Debian_13-live_USB-1f7a57?logo=debian&logoColor=white" alt="Debian 13">
   <img src="https://img.shields.io/badge/Secure_Boot-s%C3%AD-1f7a57" alt="Secure Boot">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licencia-GPL--3.0-1f7a57" alt="GPL-3.0"></a>
+  <a href="https://github.com/bytebein/PartShield/actions/workflows/ci.yml"><img src="https://github.com/bytebein/PartShield/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/estado-en_desarrollo-9a5b00" alt="En desarrollo">
 </p>
 
@@ -119,7 +121,7 @@ sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_GUI_E2E=1 cargo test -p partshield-gui
 ```
 
 Con `PARTSHIELD_SANDBOX=1`, PartShield se niega a tocar cualquier `/dev/` que
-no sea un loop device.
+no sea un loop device. Antes de contribuir, lee [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Carpeta | Qué hay |
 | --- | --- |
@@ -133,3 +135,7 @@ no sea un loop device.
 
 Lo que viene (restaurar desde la interfaz, porcentaje real, LUKS, GParted en
 la ISO…) está en [ROADMAP.md](ROADMAP.md).
+
+## Licencia
+
+[GPL-3.0 o posterior](LICENSE).

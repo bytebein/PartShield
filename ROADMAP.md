@@ -6,7 +6,8 @@ y una barra de progreso, y que todo lo demás quede en un modo avanzado.
 
 ## Antes de hacerlo público
 
-1. Repo propio `GuardNode/partshield` con CI, README y licencia.
+1. ~~Repo propio con CI, README y licencia.~~ Hecho: `bytebein/PartShield`,
+   GPL-3.0.
 2. Copia real de un disco de uso diario (Btrfs, ~653 GiB), restaurada y
    verificada de principio a fin en hardware real.
 

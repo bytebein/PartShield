@@ -484,6 +484,9 @@ impl PlanItem {
     }
 }
 
+/// El resultado de una parte: su informe y dónde se guardó, o el error.
+pub type PartResult = Result<(Report, PathBuf), String>;
+
 /// Lo que va pasando mientras se copia, para la barra de progreso.
 pub enum PlanEvent {
     /// Empieza la parte `index` (desde 0).
@@ -491,7 +494,7 @@ pub enum PlanEvent {
     /// Comando que se va a ejecutar.
     Command(String),
     /// Ha terminado la parte `index`.
-    Done(usize, Result<(Report, PathBuf), String>),
+    Done(usize, Box<PartResult>),
     /// Tabla de particiones guardada (o por qué no).
     Table(Result<PathBuf, String>),
 }
@@ -522,7 +525,7 @@ pub fn run_plan(
         };
         let r = run_item(item, dest, tx).map_err(|e| format!("{e:#}"));
         let _ = fwd.join();
-        let _ = events.send(PlanEvent::Done(i, r));
+        let _ = events.send(PlanEvent::Done(i, Box::new(r)));
     }
 }
 
@@ -854,7 +857,7 @@ mod tests {
         let mut commands = 0;
         for ev in rx.try_iter() {
             match ev {
-                PlanEvent::Done(i, r) => done.push((i, r)),
+                PlanEvent::Done(i, r) => done.push((i, *r)),
                 PlanEvent::Table(t) => table = Some(t),
                 PlanEvent::Command(_) => commands += 1,
                 PlanEvent::Part(_) => {}
