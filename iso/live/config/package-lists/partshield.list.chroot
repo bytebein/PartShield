@@ -1,0 +1,77 @@
+# Sistema live
+live-boot
+live-config
+live-config-systemd
+# Crea el usuario partshield al arrancar. live-config solo lo recomienda y
+# construimos sin recomendados: sin él, el inicio automático falla.
+user-setup
+systemd-sysv
+sudo
+locales
+console-setup
+keyboard-configuration
+bash-completion
+less
+nano
+man-db
+
+# Secure Boot (shim y GRUB firmados por Debian; el kernel de Debian ya viene firmado)
+shim-signed
+grub-efi-amd64-signed
+mokutil
+
+# PartShield y lo que usa (partshield, btrfs-progs y partclone llegan de
+# packages.chroot, compilados por nosotros: ver iso/versions.env)
+partshield
+btrfs-progs
+partclone
+zstd
+gdisk
+fdisk
+parted
+dosfstools
+mtools
+exfatprogs
+e2fsprogs
+xfsprogs
+ntfs-3g
+cryptsetup
+lvm2
+mdadm
+
+# Interfaz: partshield-gui a pantalla completa en cage (Wayland, sin escritorio)
+partshield-gui
+cage
+wlr-randr
+libgtk-4-1
+libadwaita-1-0
+libgl1-mesa-dri
+libegl-mesa0
+libgles2
+fonts-cantarell
+fonts-dejavu-core
+adwaita-icon-theme
+# Cargador SVG de gdk-pixbuf: el logo de la pantalla de inicio.
+librsvg2-common
+hicolor-icon-theme
+xkb-data
+dbus-user-session
+
+# Recuperación y diagnóstico
+gddrescue
+testdisk
+smartmontools
+nvme-cli
+hdparm
+pciutils
+usbutils
+lsof
+
+# Red (copiar a un NAS, descargar actualizaciones)
+network-manager
+openssh-client
+rsync
+nfs-common
+cifs-utils
+ca-certificates
+curl

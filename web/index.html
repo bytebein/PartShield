@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>PartShield · copias de Btrfs que se restauran de verdad</title>
+<meta name="description" content="PartShield no da una copia por buena hasta restaurarla, montarla y compararla con el original. Live USB sobre Debian 13 con Secure Boot.">
+<meta property="og:title" content="PartShield">
+<meta property="og:description" content="Copias de Btrfs que no se dan por buenas hasta restaurarlas y comprobarlas.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.partshield.io/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3CclipPath id='ps-escudo'%3E%3Cpath d='M64 6 18 22v36c0 31 19.6 55.4 46 64 26.4-8.6 46-33 46-64V22z'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg clip-path='url%28%23ps-escudo%29'%3E%3Crect width='128' height='44' fill='%232fae7b'/%3E%3Crect y='47' width='128' height='34' fill='%2326946a'/%3E%3Crect y='84' width='128' height='44' fill='%231f7a57'/%3E%3C/g%3E%3Cpath d='m40 64 17 17 31-34' fill='none' stroke='%23fff' stroke-width='13' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f7f6f2; --bg-2: #efede6; --card: #ffffff; --fg: #1b1a17; --muted: #5d5950;
+  --line: #e1ddd2; --accent: #1f7a57; --accent-soft: #e2f1ea; --warn: #9a5b00; --warn-soft: #fbefdc;
+  --bad: #b3261e; --bad-soft: #fbe5e3; --code: #f0eee8;
+  --radius: 14px; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121311; --bg-2: #181a17; --card: #1d1f1c; --fg: #ecebe6; --muted: #a6a39a;
+    --line: #2d2f2b; --accent: #5ccb9a; --accent-soft: #1b2e25; --warn: #e8b25a; --warn-soft: #2e2515;
+    --bad: #f08a80; --bad-soft: #2f1a18; --code: #232521;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; background: var(--bg); }
+body { margin: 0; background: transparent; color: var(--fg); position: relative; isolation: isolate;
+  font: 17px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code, pre { font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace; font-size: .88em; }
+code { background: var(--code); padding: .1em .35em; border-radius: 6px; }
+pre { background: var(--code); padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.5; margin: 12px 0; }
+pre code { background: none; padding: 0; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+section { padding: 72px 0; }
+section + section { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+h1, h2, h3 { line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 14px; }
+h2 { font-size: clamp(1.6rem, 3.2vw, 2.1rem); }
+h3 { font-size: 1.12rem; }
+.kicker { font-size: .82rem; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); margin: 0 0 10px; }
+.lead { font-size: 1.15rem; color: var(--muted); max-width: 62ch; }
+
+/* fondo: aurora suave con los colores de la marca */
+:root { --glow-1: #1f7a57; --glow-2: #2f6fdd; --glow-3: #8b5cf6; --glow-op: .30; --grid: rgba(27,26,23,.06); }
+@media (prefers-color-scheme: dark) { :root { --glow-1: #2fbf86; --glow-2: #3b82f6; --glow-3: #a78bfa; --glow-op: .34; --grid: rgba(236,235,230,.05); } }
+body::before {
+  content: ""; position: fixed; inset: -25vmax; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(38vmax 30vmax at 18% 12%, color-mix(in srgb, var(--glow-1) calc(var(--glow-op) * 100%), transparent), transparent 70%),
+    radial-gradient(36vmax 28vmax at 78% 22%, color-mix(in srgb, var(--glow-2) calc(var(--glow-op) * 80%), transparent), transparent 70%),
+    radial-gradient(30vmax 24vmax at 65% 70%, color-mix(in srgb, var(--glow-3) calc(var(--glow-op) * 55%), transparent), transparent 72%),
+    radial-gradient(28vmax 22vmax at 10% 85%, color-mix(in srgb, var(--glow-1) calc(var(--glow-op) * 50%), transparent), transparent 72%);
+  filter: blur(24px);
+  animation: aurora 38s ease-in-out infinite alternate;
+}
+@keyframes aurora {
+  0%   { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  50%  { transform: translate3d(3vmax, -2vmax, 0) rotate(6deg) scale(1.05); }
+  100% { transform: translate3d(-3vmax, 2vmax, 0) rotate(-4deg) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { body::before { animation: none; } html { scroll-behavior: auto; } }
+
+/* cabecera */
+header.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 16px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--fg); text-decoration: none; font-size: 1.08rem; }
+.brand svg { width: 26px; height: 26px; }
+nav.links { display: flex; gap: 22px; font-size: .95rem; }
+nav.links a { color: var(--muted); text-decoration: none; }
+nav.links a:hover { color: var(--fg); }
+@media (max-width: 720px) { nav.links a:not(.cta) { display: none; } }
+
+/* portada */
+.hero { padding: 96px 0 72px; position: relative; overflow: hidden; }
+.hero::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 44px 44px; background-position: center top;
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 30%, transparent 75%);
+          mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 30%, transparent 75%);
+}
+.hero h1 .grad {
+  background: linear-gradient(100deg, var(--fg) 10%, var(--accent) 55%, var(--glow-2) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero h1 { font-size: clamp(2.2rem, 5.6vw, 3.6rem); max-width: 17ch; }
+.hero .lead { font-size: 1.22rem; margin: 18px 0 30px; }
+.buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px;
+  font-weight: 600; text-decoration: none; border: 1px solid var(--line); color: var(--fg); background: var(--card); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .btn.primary { color: #0d1a14; } }
+.btn:hover { filter: brightness(1.05); }
+.pill { display: inline-block; font-size: .8rem; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+  background: var(--warn-soft); color: var(--warn); margin-bottom: 18px; }
+
+/* tarjetas */
+.grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 28px; }
+.card { background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); }
+.card p { margin: 0; color: var(--muted); }
+.card .icon { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center; margin-bottom: 14px; }
+.card .icon svg { width: 20px; height: 20px; }
+
+/* el problema */
+.compare { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 28px; }
+.side { border-radius: var(--radius); padding: 22px; border: 1px solid var(--line); background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.side.bad { border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+.side.good { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.side h3 { display: flex; align-items: center; gap: 8px; }
+.tag { font-size: .75rem; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+.tag.bad { background: var(--bad-soft); color: var(--bad); }
+.tag.good { background: var(--accent-soft); color: var(--accent); }
+.side ol { margin: 10px 0 0; padding-left: 1.2em; color: var(--muted); }
+.side li { margin: 4px 0; }
+.terminal { background: #141512; color: #d9d7cf; border-radius: 10px; padding: 14px 16px; font-size: .82rem; margin-top: 14px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; overflow-x: auto; white-space: pre; line-height: 1.55; }
+.terminal .r { color: #f08a80; } .terminal .g { color: #7ed3a8; } .terminal .d { color: #8d8a80; }
+
+/* pasos de verificación */
+.steps { list-style: none; padding: 0; margin: 32px 0 0; display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); counter-reset: s; }
+.steps li { counter-increment: s; background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; position: relative; }
+.steps li::before { content: counter(s); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-weight: 700; font-size: .9rem; margin-bottom: 10px; }
+@media (prefers-color-scheme: dark) { .steps li::before { color: #0d1a14; } }
+.steps strong { display: block; margin-bottom: 4px; }
+.steps span { color: var(--muted); font-size: .94rem; }
+.verdicts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.verdict { padding: 8px 14px; border-radius: 10px; font-weight: 600; font-size: .93rem; border: 1px solid var(--line); background: var(--card); }
+.verdict.v { color: var(--accent); } .verdict.r { color: var(--warn); } .verdict.n { color: var(--bad); }
+
+/* tabla de modos */
+.table { width: 100%; border-collapse: collapse; margin-top: 26px; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; font-size: .95rem; }
+.table th, .table td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table th { background: var(--bg-2); font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.table tr:last-child td { border-bottom: 0; }
+.table td:first-child { font-weight: 650; white-space: nowrap; }
+.status { font-size: .78rem; font-weight: 700; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.status.ok { background: var(--accent-soft); color: var(--accent); }
+.status.wip { background: var(--warn-soft); color: var(--warn); }
+.scroll { overflow-x: auto; }
+@media (max-width: 640px) {
+  .table thead { display: none; }
+  .table tr { display: block; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .table tr:last-child { border-bottom: 0; }
+  .table td { display: block; border: 0; padding: 3px 16px; }
+  .table td:first-child { font-size: 1.05rem; }
+  .table td:nth-child(3) { color: var(--muted); }
+  .table td:nth-child(4) { padding-top: 6px; }
+}
+
+/* descarga */
+.download { background: color-mix(in srgb, var(--card) 86%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line); border-radius: 20px; padding: 30px; box-shadow: var(--shadow); margin-top: 26px; }
+.download .meta { display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--muted); font-size: .92rem; margin: 6px 0 18px; }
+.hash { word-break: break-all; font-size: .8rem; color: var(--muted); }
+.warnbox { background: var(--warn-soft); color: var(--fg); border-radius: 12px; padding: 14px 16px; margin-top: 18px; font-size: .94rem; }
+.warnbox strong { color: var(--warn); }
+
+/* hoja de ruta */
+.roadmap { list-style: none; padding: 0; margin: 28px 0 0; border-left: 2px solid var(--line); }
+.roadmap li { position: relative; padding: 0 0 22px 24px; }
+.roadmap li::before { content: ""; position: absolute; left: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--line); }
+.roadmap li.done::before { background: var(--accent); border-color: var(--accent); }
+.roadmap li.now::before { background: var(--warn); border-color: var(--warn); }
+.roadmap strong { display: block; }
+.roadmap span { color: var(--muted); font-size: .95rem; }
+
+/* preguntas */
+details { background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: 12px; padding: 4px 18px; margin-top: 12px; }
+summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+details p { margin: 0 0 14px; color: var(--muted); }
+
+footer { padding: 40px 0 60px; color: var(--muted); font-size: .9rem; border-top: 1px solid var(--line); }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 128 128" aria-hidden="true"><defs><clipPath id="ps-escudo"><path d="M64 6 18 22v36c0 31 19.6 55.4 46 64 26.4-8.6 46-33 46-64V22z"/></clipPath></defs><g clip-path="url(#ps-escudo)"><rect width="128" height="44" fill="#2fae7b"/><rect y="47" width="128" height="34" fill="#26946a"/><rect y="84" width="128" height="44" fill="#1f7a57"/></g><path d="m40 64 17 17 31-34" fill="none" stroke="#fff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      PartShield
+    </a>
+    <nav class="links" aria-label="Secciones">
+      <a href="#problema">El problema</a>
+      <a href="#como">Cómo funciona</a>
+      <a href="#modos">Modos</a>
+      <a href="#ruta">Hoja de ruta</a>
+      <a class="cta" href="#descarga">Descargar</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <span class="pill">Versión de prueba 0.1.0 · en desarrollo</span>
+    <h1>Una copia no está hecha <span class="grad">hasta que se ha restaurado.</span></h1>
+    <p class="lead">PartShield copia tus sistemas Btrfs y, antes de decirte que todo ha ido bien, restaura la copia en un disco temporal, la monta y la compara con el original. Si algo no cuadra, lo dice.</p>
+    <div class="buttons">
+      <a class="btn primary" href="#descarga">Descargar la ISO</a>
+      <a class="btn" href="#problema">Por qué existe</a>
+    </div>
+  </div>
+</section>
+
+<section id="problema">
+  <div class="wrap">
+    <p class="kicker">El problema</p>
+    <h2>Tres copias "correctas" que no se podían restaurar</h2>
+    <p class="lead">Las herramientas de copia de discos suelen fiarse de que el programa que copia termine sin error. Con Btrfs y la característica <code>BLOCK_GROUP_TREE</code>, partclone anterior a 0.3.49 dejaba fuera un bloque esencial, el <em>chunk root</em>, y aun así salía con éxito.</p>
+    <div class="compare">
+      <div class="side bad">
+        <h3><span class="tag bad">Antes</span> Confiar en el código de salida</h3>
+        <ol>
+          <li>partclone copia la partición y termina con éxito.</li>
+          <li>La herramienta marca la copia como correcta.</li>
+          <li>El día que hace falta, la copia no monta.</li>
+        </ol>
+        <div class="terminal"><span class="d">$ mount /dev/sdb2 /mnt</span>
+<span class="r">bad tree block 25460736, bytenr mismatch, have=0</span>
+<span class="r">ERROR: cannot read chunk root</span>
+<span class="r">mount: can't read superblock on /dev/sdb2</span></div>
+      </div>
+      <div class="side good">
+        <h3><span class="tag good">PartShield</span> Comprobar el resultado</h3>
+        <ol>
+          <li>Lee las características del sistema de archivos y bloquea los modos que no las soportan.</li>
+          <li>Copia y restaura la copia en un Btrfs temporal.</li>
+          <li>Solo la da por válida si monta, pasa <code>btrfs check</code> y coincide con el original.</li>
+        </ol>
+        <div class="terminal"><span class="d">$ partshield backup /home --dest /mnt/usb</span>
+  [ok  ] restaurar    cadena recibida
+  [ok  ] estructura   btrfs check sin errores
+  [ok  ] montaje      solo lectura, Received UUID
+  [ok  ] comparacion  metadatos y scrub
+  [ok  ] muestra      hashes iguales al origen
+<span class="g">COPIA VÁLIDA: restaurada y comprobada</span></div>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:22px">Desde btrfs-progs 7, <code>mkfs.btrfs</code> activa <code>BLOCK_GROUP_TREE</code> por defecto: cualquier Btrfs nuevo tiene esta característica.</p>
+  </div>
+</section>
+
+<section id="como">
+  <div class="wrap">
+    <p class="kicker">Cómo funciona</p>
+    <h2>Cinco comprobaciones antes de decir "válida"</h2>
+    <p class="lead">Cada copia se restaura en un archivo temporal disperso sobre un dispositivo loop, nunca sobre tus discos. Si falta cualquiera de los cinco pasos, la copia no es válida.</p>
+    <ol class="steps">
+      <li><strong>Restaurar</strong><span>La cadena completa (copia base e incrementales), comprobando el hash de cada archivo.</span></li>
+      <li><strong>Estructura</strong><span><code>btrfs check --readonly</code> sobre la copia restaurada.</span></li>
+      <li><strong>Montaje</strong><span>Se monta en solo lectura y se comprueba el subvolumen recibido.</span></li>
+      <li><strong>Comparación</strong><span>Tipos, tamaños, permisos, propietarios, enlaces y atributos, más <code>btrfs scrub</code>.</span></li>
+      <li><strong>Muestra</strong><span>Hash del contenido de una muestra reproducible de archivos, o de todos.</span></li>
+    </ol>
+    <div class="verdicts" aria-label="Veredictos posibles">
+      <span class="verdict v">✓ Válida: los cinco pasos superados</span>
+      <span class="verdict r">! Reducida: algún paso no se pudo hacer</span>
+      <span class="verdict n">✗ No válida: algún paso falló</span>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 15l2 2 4-4"/></svg></div>
+        <h3>Informe de cada copia</h3>
+        <p>JSON y HTML junto a la copia, con los pasos, las características detectadas y cada comando ejecutado. Firma ed25519 opcional.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17V7l8-4 8 4v10l-8 4z"/><path d="M4 7l8 4 8-4M12 11v10"/></svg></div>
+        <h3>Detecta antes de copiar</h3>
+        <p>Lee el superbloque y sus copias directamente, con verificación de checksum, y decide qué modos son seguros para esas características y ese kernel.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg></div>
+        <h3>Muestra lo que hace</h3>
+        <p>Cada herramienta externa (btrfs, mount, losetup…) se muestra antes de ejecutarse, para que puedas repetirla a mano.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="modos">
+  <div class="wrap">
+    <p class="kicker">Modos de copia</p>
+    <h2>El modo adecuado para cada disco</h2>
+    <p class="lead">PartShield elige según lo que detecta y te explica por qué descarta un modo.</p>
+    <div class="scroll">
+      <table class="table">
+        <thead><tr><th>Modo</th><th>Qué copia</th><th>Cuándo</th><th>Estado</th></tr></thead>
+        <tbody>
+          <tr><td>send</td><td>Subvolúmenes con <code>btrfs send</code>, comprimidos con zstd. Incrementales y varios subvolúmenes (<code>@</code>, <code>@home</code>) en una copia.</td><td>Por defecto. Restaurar en otro disco o tamaño.</td><td><span class="status ok">Disponible</span></td></tr>
+          <tr><td>raw</td><td>El dispositivo entero, sector a sector, al estilo de <code>dd</code>. Verificación bit a bit.</td><td>Sistemas que no son Btrfs o con características no probadas.</td><td><span class="status ok">Disponible</span></td></tr>
+          <tr><td>disposición</td><td>Tabla de particiones, partición EFI y UUID del sistema de archivos.</td><td>Para que un sistema restaurado vuelva a arrancar.</td><td><span class="status ok">Disponible</span></td></tr>
+          <tr><td>partclone</td><td>Solo los bloques usados de la partición.</td><td>Clon idéntico. Se bloquea con partclone anterior a 0.3.50 o con características no probadas.</td><td><span class="status wip">Detección lista; copia en desarrollo</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="descarga">
+  <div class="wrap">
+    <p class="kicker">Descarga</p>
+    <h2>Live USB de PartShield</h2>
+    <p class="lead">Debian 13 "trixie" con el kernel firmado de Debian: arranca con Secure Boot activado, en UEFI y en BIOS. Arranca directamente en la interfaz de PartShield; incluye también la consola y herramientas de recuperación.</p>
+    <div class="download">
+      <h3>partshield-0.1.0-20261026-2-amd64.iso</h3>
+      <div class="meta">
+        <span>910 MB · amd64</span>
+        <span>con interfaz gráfica</span>
+        <span>btrfs-progs 7.3</span>
+        <span>partclone 0.3.50</span>
+        <span>kernel 6.12 (Debian)</span>
+      </div>
+      <div class="buttons">
+        <a class="btn primary" href="/descargas/partshield-0.1.0-20261026-2-amd64.iso">Descargar ISO</a>
+        <a class="btn" href="/descargas/partshield-0.1.0-20261026-2-amd64.iso.sha256">SHA-256</a>
+        <a class="btn" href="/descargas/">Todas las versiones</a>
+      </div>
+      <p class="hash">SHA-256: f60f2d898a42ff6b056f59a28ded74cd45f0fbb6a5378e9bca675911489b73aa</p>
+      <pre><code>sha256sum -c partshield-0.1.0-20261026-2-amd64.iso.sha256
+sudo dd if=partshield-0.1.0-20261026-2-amd64.iso of=/dev/sdX bs=4M status=progress conv=fsync</code></pre>
+      <div class="warnbox"><strong>Versión de prueba.</strong> Úsala para probar, no como única copia de datos importantes. <code>dd</code> borra el pendrive de destino: comprueba antes con <code>lsblk</code> que <code>sdX</code> es el pendrive. Todavía no hay interfaz gráfica: se usa desde la consola.</div>
+      <p style="margin-top:18px;color:var(--muted);font-size:.95rem">También incluye: ddrescue, testdisk y photorec, smartctl, nvme-cli, sgdisk, cryptsetup, LVM y firmware para wifi y gráficos.</p>
+    </div>
+  </div>
+</section>
+
+<section id="ruta">
+  <div class="wrap">
+    <p class="kicker">Hoja de ruta</p>
+    <h2>Dónde estamos</h2>
+    <ul class="roadmap">
+      <li class="done"><strong>Motor de copias</strong><span>Detección, modos send y raw, verificación en cinco pasos e informes firmados.</span></li>
+      <li class="now"><strong>Live USB</strong><span>Debian 13 con Secure Boot. Probado en QEMU con BIOS, UEFI y Secure Boot; pruebas en equipos reales en curso.</span></li>
+      <li><strong>Interfaz gráfica</strong><span>Asistente paso a paso y modo avanzado, que muestra cada comando antes de ejecutarlo.</span></li>
+      <li><strong>Modo partclone</strong><span>Copia por bloques usados, con la lista de características probadas.</span></li>
+      <li><strong>Más sistemas de archivos</strong><span>ext4, XFS y la partición EFI, con la misma verificación.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="preguntas">
+  <div class="wrap">
+    <p class="kicker">Preguntas</p>
+    <h2>Preguntas frecuentes</h2>
+    <details><summary>¿Toca mis discos al verificar?</summary><p>No. La restauración de prueba se hace en un archivo temporal disperso conectado como dispositivo loop. Tus discos solo se leen durante la copia y solo se escriben si tú pides restaurar sobre ellos.</p></details>
+    <details><summary>¿Puedo copiar un disco montado?</summary><p>En modo send, sí: trabaja sobre un snapshot de solo lectura. En modo raw, no: el origen debe estar desmontado o montado en solo lectura, porque una imagen de un disco que cambia mientras se lee no es coherente.</p></details>
+    <details><summary>¿Y si el disco está fallando?</summary><p>Primero conviene sacar una imagen con ddrescue (incluido en la ISO), que lee cada sector una sola vez, y después copiar esa imagen.</p></details>
+    <details><summary>¿Funciona con Secure Boot?</summary><p>Sí. La ISO usa el shim y el kernel firmados por Debian, así que arranca con Secure Boot activado sin tocar la BIOS.</p></details>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>PartShield · partshield.io · partshield.dev</span>
+  </div>
+</footer>
+</body>
+</html>

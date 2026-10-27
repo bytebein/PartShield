@@ -1,0 +1,11 @@
+[package]
+name = "partshield"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+partshield-core = { path = "../core" }

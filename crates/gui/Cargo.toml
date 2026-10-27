@@ -1,0 +1,17 @@
+[package]
+name = "partshield-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+partshield-core = { path = "../core" }
+# GTK 4.12+ y libadwaita 1.5+: Debian 13 trae 4.18 y 1.7.
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }

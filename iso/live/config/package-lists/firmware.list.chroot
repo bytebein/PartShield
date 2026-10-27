@@ -1,0 +1,29 @@
+# Firmware elegido a mano (--firmware-chroot false): con true, live-build mete
+# también los paquetes *-installer (b43...), que descargan firmware al
+# instalarse y rompen la construcción sin red.
+firmware-linux-free
+firmware-misc-nonfree
+firmware-intel-misc
+amd64-microcode
+intel-microcode
+
+# Wifi y Bluetooth
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+firmware-mediatek
+firmware-libertas
+
+# Gráficos (para que la consola y la futura interfaz se vean en portátiles modernos)
+firmware-amd-graphics
+firmware-intel-graphics
+firmware-nvidia-graphics
+
+# Sonido de portátiles Intel recientes
+firmware-sof-signed
+
+# Red cableada de servidores
+firmware-bnx2
+firmware-bnx2x
+firmware-qlogic

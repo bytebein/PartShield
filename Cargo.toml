@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli", "crates/gui"]
+# La interfaz necesita GTK 4 y libadwaita instalados: queda fuera de
+# `cargo build`/`cargo test` por defecto; se compila con `-p partshield-gui`.
+default-members = ["crates/core", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+[workspace.dependencies]
+anyhow = "1"
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive"] }
+crc32c = "0.6"
+ed25519-dalek = "2"
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+walkdir = "2"
+zstd = { version = "0.13", features = ["zstdmt"] }
