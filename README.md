@@ -5,137 +5,144 @@
 <h1 align="center">PartShield</h1>
 
 <p align="center">
-  <strong>Copias de seguridad que se restauran y se comprueban antes de darlas por buenas.</strong>
+  <strong>Backups that are restored and verified before they're called good.</strong>
 </p>
 
 <p align="center">
   <a href="https://partshield.io"><img src="https://img.shields.io/badge/web-partshield.io-1f7a57" alt="partshield.io"></a>
   <img src="https://img.shields.io/badge/Rust-1f7a57?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Debian_13-live_USB-1f7a57?logo=debian&logoColor=white" alt="Debian 13">
-  <img src="https://img.shields.io/badge/Secure_Boot-s%C3%AD-1f7a57" alt="Secure Boot">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/licencia-GPL--3.0-1f7a57" alt="GPL-3.0"></a>
+  <img src="https://img.shields.io/badge/Secure_Boot-yes-1f7a57" alt="Secure Boot">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-1f7a57" alt="GPL-3.0"></a>
   <a href="https://github.com/bytebein/PartShield/actions/workflows/ci.yml"><img src="https://github.com/bytebein/PartShield/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/estado-en_desarrollo-9a5b00" alt="En desarrollo">
+  <img src="https://img.shields.io/badge/status-in_development-9a5b00" alt="In development">
 </p>
 
 <p align="center">
-  <img src="assets/capturas/inicio.png" width="720" alt="Pantalla de inicio de PartShield">
+  <strong>English</strong> · <a href="README.es.md">Español</a>
 </p>
+
+<p align="center">
+  <img src="assets/capturas/inicio.png" width="720" alt="PartShield home screen">
+</p>
+
+<p align="center"><sub>The interface is in Spanish for now; English is on the <a href="ROADMAP.md">roadmap</a>.</sub></p>
 
 ---
 
-## Por qué
+## Why
 
-Una copia no está hecha hasta que se ha restaurado.
+A backup isn't done until it has been restored.
 
-PartShield nace de un fallo real: partclone copiaba sistemas Btrfs con
-`BLOCK_GROUP_TREE` y los daba por buenos, pero no montaban porque el
-`chunk_root` nunca se había copiado
+PartShield was born from a real bug: partclone copied Btrfs filesystems with
+`BLOCK_GROUP_TREE` and reported success, but the copies wouldn't mount because
+the `chunk_root` was never copied
 ([partclone#303](https://github.com/Thomas-Tsai/partclone/issues/303),
 [rescuezilla#672](https://github.com/rescuezilla/rescuezilla/issues/672)).
-Tres copias «correctas» que no servían para nada.
+Three "successful" backups that were useless.
 
-Por eso PartShield no se fía de que la copia termine sin errores. La restaura
-aparte, la monta, la compara con el original y solo entonces dice si vale.
+So PartShield doesn't trust a copy just because it finished without errors.
+It restores it somewhere else, mounts it, compares it with the original, and
+only then tells you whether it's good.
 
-## Cómo se usa
+## How to use it
 
-Arranca el USB de PartShield (Debian 13 con Secure Boot, sin escritorio: solo
-la aplicación) y haz la copia en tres pasos.
+Boot the PartShield USB (Debian 13 with Secure Boot, no desktop: just the app)
+and back up in three steps.
 
 | | |
 | --- | --- |
-| **1 · Qué copiar** | El disco entero o solo las particiones que quieras, con casillas. |
-| **2 · Dónde** | Otro disco, por ejemplo un USB. No se borra nada de lo que haya. |
-| **3 · Empezar** | Una barra mientras se copia y se comprueba. |
+| **1 · What** | The whole disk or only the partitions you want, with checkboxes. |
+| **2 · Where** | Another disk, a USB drive for example. Nothing already on it is deleted. |
+| **3 · Start** | One progress bar while it copies and verifies. |
 
 <p align="center">
-  <img src="assets/capturas/copia.png" width="720" alt="Elegir qué copiar y dónde">
+  <img src="assets/capturas/copia.png" width="720" alt="Choosing what to back up and where">
 </p>
 
-Al final, una de tres respuestas:
+At the end you get one of three answers:
 
-| | Resultado | Qué significa |
+| | Result | Meaning |
 | --- | --- | --- |
-| 🟢 | **Copia comprobada** | Se ha restaurado aparte y coincide con el original. Se puede restaurar. |
-| 🟡 | **Sin comprobar del todo** | No falló nada, pero algún paso no se pudo hacer. Mira cuál antes de fiarte. |
-| 🔴 | **No vale** | Algo falló. No confíes en esta copia. |
+| 🟢 | **Verified** | Restored separately and identical to the original. Safe to restore. |
+| 🟡 | **Not fully verified** | Nothing failed, but some step couldn't run. Check which before trusting it. |
+| 🔴 | **Not valid** | Something failed. Don't trust this backup. |
 
 <p align="center">
-  <img src="assets/capturas/resultado.png" width="720" alt="Resultado: copia comprobada">
+  <img src="assets/capturas/resultado.png" width="720" alt="Result: backup verified">
 </p>
 
-El interruptor **Avanzado** enseña todo lo demás: superbloque, features,
-modos de copia seguros, subvolúmenes y cada comando que se ejecuta.
+The **Advanced** switch shows everything else: superblock, features, which
+backup modes are safe, subvolumes, and every command that runs.
 
-## Cómo comprueba
+## How it verifies
 
-Cada copia pasa cinco pasos. Solo es **válida** si pasan los cinco.
+Every backup goes through five steps. It is **valid** only if all five pass.
 
-| Paso | Btrfs (`btrfs send`) | Resto (sector a sector) |
+| Step | Btrfs (`btrfs send`) | Everything else (sector by sector) |
 | --- | --- | --- |
-| **restaurar** | `btrfs receive` en un Btrfs temporal, con el hash de cada stream comprobado antes | Se escribe la imagen en un archivo temporal |
-| **estructura** | `btrfs check --readonly` | El fsck de su sistema de archivos en solo lectura (ext4, vfat, exFAT, XFS, NTFS) |
-| **montaje** | Se monta en solo lectura | Se monta en solo lectura |
-| **comparación** | Scrub y mismo árbol que el original: tipos, tamaños, permisos, propietarios y enlaces | Idéntica bit a bit al dispositivo |
-| **muestra** | BLAKE3 de una muestra de archivos contra el original | Se releen 64 trozos del origen y se comparan |
+| **restore** | `btrfs receive` into a scratch Btrfs, each stream's hash checked first | The image is written to a scratch file |
+| **structure** | `btrfs check --readonly` | The filesystem's own read-only fsck (ext4, vfat, exFAT, XFS, NTFS) |
+| **mount** | Mounted read-only | Mounted read-only |
+| **compare** | Scrub, and the same tree as the original: types, sizes, permissions, owners and links | Bit-for-bit identical to the device |
+| **sample** | BLAKE3 of a sample of files against the original | 64 chunks re-read from the source and compared |
 
-Cada comando externo se muestra antes de ejecutarse y queda en el informe
-(JSON y HTML, firmable con ed25519) que se guarda junto a la copia.
+Every external command is shown before it runs and recorded in the report
+(JSON and HTML, optionally signed with ed25519) saved next to the backup.
 
-## Línea de órdenes
+## Command line
 
-La GUI y la CLI usan el mismo motor.
+The GUI and the CLI share the same engine.
 
 ```sh
 cargo build --release
 sudo target/release/partshield inspect /dev/nvme0n1p2
 
-# Copia de varios subvolúmenes con tabla de particiones, ESP y UUID
+# Several subvolumes, plus partition table, ESP and UUID
 sudo target/release/partshield backup --subvol @=/ --subvol @home=/home --layout \
-    --dest /mnt/usb/copias --keep-snapshot
+    --dest /mnt/usb/backups --keep-snapshot
 
-# Incremental sobre una copia anterior válida
-sudo target/release/partshield backup /home --dest /mnt/usb/copias --keep-snapshot \
-    --parent /mnt/usb/copias/home-AAAAMMDD-HHMMSS.report.json
+# Incremental on top of an earlier valid backup
+sudo target/release/partshield backup /home --dest /mnt/usb/backups --keep-snapshot \
+    --parent /mnt/usb/backups/home-YYYYMMDD-HHMMSS.report.json
 
-# Imagen sector a sector de una partición desmontada
-sudo target/release/partshield backup --mode raw /dev/sdb2 --dest /mnt/usb/copias
+# Sector-by-sector image of an unmounted partition
+sudo target/release/partshield backup --mode raw /dev/sdb2 --dest /mnt/usb/backups
 
-# Volver a verificar y restaurar
-sudo target/release/partshield verify --report /mnt/usb/copias/home-XXXX.report.json
-sudo target/release/partshield restore --report /mnt/usb/copias/home-XXXX.report.json \
-    --to /mnt/nuevo --as home
+# Verify again, and restore
+sudo target/release/partshield verify --report /mnt/usb/backups/home-XXXX.report.json
+sudo target/release/partshield restore --report /mnt/usb/backups/home-XXXX.report.json \
+    --to /mnt/new --as home
 ```
 
-`partshield --help` lista el resto: `restore-layout` y `verify-report`.
+`partshield --help` lists the rest: `restore-layout` and `verify-report`.
 
-## Desarrollo
+## Development
 
 ```sh
-cargo fmt --check && cargo clippy --all-targets && cargo test
+cargo fmt --check && cargo clippy --workspace --all-targets && cargo test --workspace
 
-# Puertas de punta a punta: root y loop devices, nunca discos reales
+# End-to-end tests: root and loop devices, never real disks
 sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_E2E=1 cargo test --test e2e --test raw_e2e --test multi_e2e
 sudo PARTSHIELD_SANDBOX=1 PARTSHIELD_GUI_E2E=1 cargo test -p partshield-gui
 ```
 
-Con `PARTSHIELD_SANDBOX=1`, PartShield se niega a tocar cualquier `/dev/` que
-no sea un loop device. Antes de contribuir, lee [CONTRIBUTING.md](CONTRIBUTING.md).
+With `PARTSHIELD_SANDBOX=1`, PartShield refuses to touch any `/dev/` that isn't
+a loop device. Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
 
-| Carpeta | Qué hay |
+| Folder | What's inside |
 | --- | --- |
-| `crates/core` | El motor: detección, send, raw, verificación e informes |
-| `crates/cli` | La línea de órdenes |
-| `crates/gui` | La interfaz (GTK 4 + libadwaita) |
-| `iso` | El live USB con live-build, y sus pruebas de arranque en QEMU |
+| `crates/core` | The engine: detection, send, raw, verification and reports |
+| `crates/cli` | The command line |
+| `crates/gui` | The interface (GTK 4 + libadwaita) |
+| `iso` | The live USB (live-build) and its QEMU boot tests |
 | `web` | partshield.io |
 
-## Hoja de ruta
+## Roadmap
 
-Lo que viene (restaurar desde la interfaz, porcentaje real, LUKS, GParted en
-la ISO…) está en [ROADMAP.md](ROADMAP.md).
+What's next (restoring from the GUI, real percentage progress, LUKS, GParted
+on the ISO, English interface…) is in [ROADMAP.md](ROADMAP.md).
 
-## Licencia
+## License
 
-[GPL-3.0 o posterior](LICENSE).
+[GPL-3.0 or later](LICENSE).
