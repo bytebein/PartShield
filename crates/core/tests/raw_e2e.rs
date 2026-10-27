@@ -224,3 +224,73 @@ fn raw_image_backup_verify_restore() {
     );
     assert!(!loops.contains("partshield-raw-verify"), "{loops}");
 }
+
+/// Los sistemas de archivos de un disco entero (EFI, Windows, Linux…) pasan
+/// el paso «estructura» con su propio fsck de solo lectura, y la copia sale
+/// válida, no «reducida».
+#[test]
+fn raw_image_checks_structure_of_other_filesystems() {
+    if std::env::var_os("PARTSHIELD_E2E").is_none() {
+        eprintln!("omitido: define PARTSHIELD_E2E=1 (necesita root y loop devices)");
+        return;
+    }
+    let have = |p: &str| {
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {p}"))
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    let cases: [(&str, &[&str], &str); 5] = [
+        ("mkfs.ext4", &["-q"], "e2fsck"),
+        ("mkfs.vfat", &[], "fsck.vfat"),
+        ("mkfs.exfat", &[], "fsck.exfat"),
+        ("mkfs.xfs", &["-q"], "xfs_repair"),
+        ("mkfs.ntfs", &["-Q", "-q", "-F"], "ntfsfix"),
+    ];
+    for (mkfs, args, checker) in cases {
+        if !have(mkfs) || !have(checker) {
+            eprintln!("omitido {mkfs}: falta {mkfs} o {checker}");
+            continue;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = Loop::new(tmp.path(), "origen", 320 << 20);
+        let mut a = args.to_vec();
+        a.push(&origin.dev);
+        sh(mkfs, &a);
+        let mounted = Command::new("mount")
+            .arg(&origin.dev)
+            .arg(&origin.mnt)
+            .status()
+            .is_ok_and(|st| st.success());
+        if !mounted {
+            eprintln!("omitido {mkfs}: este kernel no lo monta");
+            continue;
+        }
+        fs::write(origin.mnt.join("nota.txt"), "hola\n").unwrap();
+        sh("sync", &[]);
+        origin.umount();
+
+        let dest = tmp.path().join("copias");
+        let (report, _) = backup_raw(
+            &mut Session::new(false),
+            &RawOptions {
+                device: Path::new(&origin.dev),
+                dest_dir: &dest,
+                scratch_dir: Some(tmp.path()),
+                zstd_level: 3,
+                hash: HashAlgo::Blake3,
+                sign_key: None,
+            },
+        )
+        .unwrap();
+        let v = report.verification.as_ref().unwrap();
+        assert_eq!(
+            step(v, "estructura"),
+            StepStatus::Passed,
+            "{mkfs}: {:#?}",
+            v.steps
+        );
+        assert_eq!(report.verdict(), Verdict::Valid, "{mkfs}: {:#?}", v.steps);
+    }
+}

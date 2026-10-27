@@ -962,9 +962,11 @@ name = "partshield-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gtk4",
  "libadwaita",
  "partshield-core",
+ "serde_json",
  "tempfile",
 ]
 

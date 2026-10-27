@@ -323,11 +323,8 @@ pub fn verify(
                         Err(e) => push(ESTRUCTURA, StepStatus::Failed, format!("{e:#}")),
                     }
                 } else {
-                    push(
-                        ESTRUCTURA,
-                        StepStatus::Skipped,
-                        "no es Btrfs; no hay comprobador de estructura para este contenido".into(),
-                    );
+                    let (status, detail) = structure_check(s, &dev);
+                    push(ESTRUCTURA, status, detail);
                 }
                 match mountable(s, &dev) {
                     Some(why_not) => push(MONTAJE, StepStatus::Skipped, why_not),
@@ -486,6 +483,67 @@ impl<W: Write> Write for Tee<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
+    }
+}
+
+/// Comprobador de solo lectura de cada sistema de archivos que no es Btrfs:
+/// programa y argumentos (sin el dispositivo).
+fn fs_checker(fstype: &str) -> Option<(&'static str, &'static [&'static str])> {
+    Some(match fstype {
+        "ext2" | "ext3" | "ext4" => ("e2fsck", &["-f", "-n"]),
+        "vfat" => ("fsck.vfat", &["-n"]),
+        "exfat" => ("fsck.exfat", &["-n"]),
+        "xfs" => ("xfs_repair", &["-n"]),
+        "ntfs" => ("ntfsfix", &["--no-action"]),
+        _ => return None,
+    })
+}
+
+/// Paso «estructura» de una imagen que no es Btrfs: el fsck de su sistema
+/// de archivos en modo solo lectura. Sin comprobador conocido (o sin el
+/// programa instalado) se omite, y la copia queda en «reducida».
+fn structure_check(s: &mut Session, dev: &str) -> (StepStatus, String) {
+    let fstype = s
+        .run_unchecked(&Cmd::new("blkid").arg("-p").arg("-o").arg("export").arg(dev))
+        .ok()
+        .and_then(|o| crate::detect::blockdev::parse_blkid_export(&o.stdout).1);
+    let Some(fstype) = fstype else {
+        return (
+            StepStatus::Skipped,
+            "no tiene un sistema de archivos reconocible; la comparación bit a bit cubre \
+             el contenido"
+                .into(),
+        );
+    };
+    let Some((prog, args)) = fs_checker(&fstype) else {
+        return (
+            StepStatus::Skipped,
+            format!("no hay comprobador de estructura para {fstype}"),
+        );
+    };
+    let mut cmd = Cmd::new(prog);
+    for a in args {
+        cmd = cmd.arg(a);
+    }
+    let cmd = cmd.arg(dev);
+    let line = format!("{prog} {} {dev}", args.join(" "));
+    match s.run_unchecked(&cmd) {
+        Ok(o) if o.success => (StepStatus::Passed, format!("{line} sin errores")),
+        Ok(o) => {
+            let out = if o.stderr.trim().is_empty() {
+                &o.stdout
+            } else {
+                &o.stderr
+            };
+            (
+                StepStatus::Failed,
+                format!("{line} encontró problemas: {}", out.trim()),
+            )
+        }
+        Err(e) => (
+            StepStatus::Skipped,
+            format!("no se pudo ejecutar {prog} ({e:#}); falta en este sistema"),
+        ),
     }
 }
 

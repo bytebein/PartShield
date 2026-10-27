@@ -1,9 +1,11 @@
 //! Interfaz gráfica de PartShield (GTK 4 + libadwaita).
 //!
-//! Discos → detección de un Btrfs (superbloque, features, modos seguros,
+//! Por defecto, el modo sencillo (`basic`): qué copiar, dónde y una barra.
+//! El modo avanzado es el de siempre: discos → detección de un Btrfs (superbloque, features, modos seguros,
 //! capas de bloque) → copia con destino en otro disco → verificación y
 //! veredicto. Cada pantalla enseña los comandos que ha ejecutado.
 
+mod basic;
 mod model;
 
 use std::cell::{Cell, RefCell};
@@ -25,6 +27,17 @@ const APP_ID: &str = "io.partshield.PartShield";
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
+    app.connect_startup(|_| {
+        let css = gtk::CssProvider::new();
+        css.load_from_string(basic::CSS);
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &css,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
     app.connect_activate(build_window);
     // Los argumentos de la línea de órdenes no son para GTK.
     app.run_with_args::<&str>(&[])
@@ -32,7 +45,11 @@ fn main() -> glib::ExitCode {
 
 fn build_window(app: &adw::Application) {
     let nav = adw::NavigationView::new();
-    nav.add(&disks_page(app, &nav));
+    nav.add(&basic::home_page(app, &nav));
+    // Para pruebas y capturas: abre directamente la copia sencilla.
+    if std::env::var_os("PARTSHIELD_GUI_BASIC").is_some() {
+        nav.push(&basic::copy_page(app, &nav));
+    }
     // Para pruebas y capturas: abre directamente la detección de un dispositivo.
     if let Some(dev) = std::env::var_os("PARTSHIELD_GUI_OPEN") {
         let dev = PathBuf::from(dev);
@@ -88,7 +105,6 @@ fn disks_page(app: &adw::Application, nav: &adw::NavigationView) -> adw::Navigat
     }
     adw::NavigationPage::builder()
         .title("Discos")
-        .tag("discos")
         .child(&toolbar)
         .build()
 }
@@ -522,7 +538,7 @@ fn copy_page(
 
     match model::list_disks() {
         Ok((disks, _)) => {
-            let found = model::destinations(&disks, &src.device);
+            let found = model::destinations(&disks, std::slice::from_ref(&src.device));
             for d in &found {
                 dest_list.append(&format!("{} · {} · {}", d.title(), d.fstype, d.disk));
             }
@@ -1003,14 +1019,14 @@ fn result_view(nav: &adw::NavigationView, report: &Report, path: &std::path::Pat
     page.add(&files);
 
     let back = gtk::Button::builder()
-        .label("Volver a los discos")
+        .label("Volver al inicio")
         .halign(gtk::Align::Center)
         .build();
     back.add_css_class("pill");
     {
         let nav = nav.clone();
         back.connect_clicked(move |_| {
-            nav.pop_to_tag("discos");
+            nav.pop_to_tag("inicio");
         });
     }
     let g = adw::PreferencesGroup::new();

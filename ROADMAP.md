@@ -10,6 +10,17 @@ y una barra de progreso, y que todo lo demás quede en un modo avanzado.
 2. Copia real de un disco de uso diario (Btrfs, ~653 GiB), restaurada y
    verificada de principio a fin en hardware real.
 
+## Hecho
+
+- Inicio con «Hacer copia» y «Restaurar» (Restaurar, pendiente), interruptor
+  «Avanzado» y menú «Herramientas».
+- Copia sencilla: disco entero o particiones con casillas, destino en otro
+  disco, una barra y resultado en verde, ámbar o rojo.
+- Disco entero: tabla de particiones (`sfdisk --dump`) más cada partición;
+  Btrfs por send, el resto sector a sector.
+- Paso «estructura» para ext2/3/4, vfat, exFAT, XFS y NTFS con su fsck de
+  solo lectura: una copia de esas particiones ya puede salir válida.
+
 ## Modo básico
 
 Es el modo por defecto: la live arranca siempre en básico.
@@ -82,4 +93,8 @@ GParted.
   - Cada partición se verifica restaurándola. Para NTFS: montar solo lectura
     y comparar.
 - **NTFS sucio** (Windows hibernado o con inicio rápido): avisar y no copiar.
-- **Barra de progreso** con porcentaje real.
+- **Barra de progreso** con porcentaje real. Ahora avanza por partes (copia y
+  comprobación); en una imagen sector a sector grande se queda quieta hasta
+  terminar la copia.
+- **Restaurar desde la interfaz.**
+- GParted y Xwayland en la ISO (el botón ya existe y se activa si está).
